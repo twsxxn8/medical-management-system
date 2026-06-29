@@ -1,0 +1,27 @@
+/* 全局重置：去除默认边距，统一盒模型 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* 基础字体与背景色 */
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  background-color: #f0f2f5;
+  color: #333;
+}
+
+/* 二级标题样式 */
+h2 {
+  font-size: 20px;
+  color: #303133;
+}
+
+/* 页面容器：白色卡片 + 阴影 */
+section {
+  background-color: #fff;
+  padding: 20px;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+}

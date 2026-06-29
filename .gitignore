@@ -1,0 +1,39 @@
+# ===== Backend =====
+backend/target/
+backend/.mvn/
+backend/*.log
+
+# ===== Frontend =====
+frontend/node_modules/
+frontend/dist/
+
+# ===== 敏感配置 =====
+backend/src/main/resources/application-secret.yml
+backend/src/main/resources/application-prod.yml
+
+# ===== 编译产物 =====
+*.class
+*.jar
+*.war
+
+# ===== 日志 =====
+logs/
+*.log
+
+# ===== 本地上传文件 =====
+uploads/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*.swo
+
+# ===== 环境变量文件 =====
+.env
+.env.local
+.env.*.local
