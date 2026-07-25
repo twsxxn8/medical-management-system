@@ -6,6 +6,71 @@
 
 ## [未发布] — 2026-07
 
+### 新增 — feat/structured-output（#2）
+
+**分支：** `feat/structured-output` → `develop`  
+**提交：** `a65452c`  
+**日期：** 2026-07-25  
+**类型：** Feature  
+**影响范围：** AI 问诊模块
+
+#### 变更概述
+
+使用 DeepSeek API 的 `response_format: json_object` 模式约束 LLM 输出，AI 回复直接返回结构化 JSON（疾病方向/检查项目/科室/紧急程度/注意事项），前端用 JSON 渲染卡片，删除正则解析逻辑。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 行数 | 说明 |
+|------|------|------|------|
+| `backend/.../dto/DiagnosisResult.java` | 新增 | +119 | 结构化诊断结果 POJO（含 DiseaseItem 子类） |
+| `backend/.../dto/AiDiagnosisRequest.java` | 新增 | +27 | 统一 AI 请求 DTO（替代 @RequestBody Map，解决 UTF-8 编码问题） |
+| `backend/.../service/AiStructuredService.java` | 新增 | +243 | 结构化问诊服务（同步+流式） |
+| `backend/.../controller/AiController.java` | 修改 | 重构 | 四种调用模式：文本/流式/结构化/结构化流式 |
+| `backend/.../resources/application.yml` | 修改 | +5 | 添加 `server.servlet.encoding` 配置 |
+| `frontend/src/api/ai.ts` | 修改 | +60 | 新增 `DiagnosisResult` 类型、`streamDiagnosisStructured()`、通用 `streamSse()` |
+| `frontend/src/views/AiConsultView.vue` | 修改 | 重写 | 结构化卡片渲染（疾病概率标签/紧急程度颜色/淡入动画） |
+
+#### API 变更
+
+**新增端点：**
+
+```
+POST /api/ai/diagnosis/structured          # 同步结构化 → DiagnosisResult JSON
+POST /api/ai/diagnosis/structured/stream   # SSE 流式结构化 → token + done(DiagnosisResult)
+```
+
+**`DiagnosisResult` 结构：**
+```json
+{
+  "possible_diseases": [
+    {"name": "紧张性头痛", "probability": "高", "description": "..."}
+  ],
+  "recommended_checks": ["血压测量", "血常规"],
+  "recommended_department": "神经内科",
+  "urgency": "尽快就诊",
+  "precautions": ["保持规律作息"],
+  "note": "补充说明（可选）"
+}
+```
+
+#### 关键技术点
+
+- **DeepSeek V4 兼容：** V4 不支持 `json_schema` strict 模式，改用 `json_object` + system prompt 内嵌字段定义
+- **UTF-8 编码修复：** 新增 `server.servlet.encoding.force=true` + `AiDiagnosisRequest` DTO 替代 `@RequestBody Map`，解决中文请求体 400 错误
+- **SSE + @Valid 冲突：** `@Valid` 在 SseEmitter 端点上与 Spring Security 产生 NPE，改用手动参数校验
+- **历史对话 null 防护：** `buildRequestBody()` 中 `history` 参数添加 null guard
+- **前端 JSON 渲染：** 删除 `parseSection()`/`parseList()` 正则解析，改用 `JSON.parse()` 直接结构化渲染
+- **Markdown 代码块过滤：** 过滤 LLM 可能包裹的 ` ```json ` ` ``` ` 标记
+
+#### 测试验证
+
+- [x] 同步结构化：英文正常，中文正常（通过 `AiDiagnosisRequest` DTO 解决编码）
+- [x] SSE 流式结构化：逐 token 推送 + done 事件返回完整 DiagnosisResult JSON
+- [x] 历史对话 null：不带 history 字段不抛 NPE
+- [x] 降级处理：LLM 返回非法 JSON 时前端退化为文本展示
+
+---
+
 ### 新增 — feat/ai-streaming（#1）
 
 **分支：** `feat/ai-streaming` → `develop`  

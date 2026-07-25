@@ -1,11 +1,14 @@
 package com.example.backend.controller;
 
 import com.example.backend.common.Result;
+import com.example.backend.dto.AiDiagnosisRequest;
+import com.example.backend.dto.DiagnosisResult;
 import com.example.backend.service.AiService;
+import com.example.backend.service.AiStructuredService;
 import com.example.backend.service.AiStreamService;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import javax.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,11 +17,12 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * AI 智能问诊接口。
- * 提供两种调用模式：
+ * AI 智能问诊接口，提供四种调用模式：
  * <ul>
- *   <li>同步模式：POST /api/ai/diagnosis → 等待完整结果后返回</li>
- *   <li>流式模式：POST /api/ai/diagnosis/stream → SSE 逐 token 推送（打字机效果）</li>
+ *   <li>同步文本：POST /api/ai/diagnosis → 等待完整文本结果</li>
+ *   <li>流式文本：POST /api/ai/diagnosis/stream → SSE 逐 token 推送</li>
+ *   <li>同步结构化：POST /api/ai/diagnosis/structured → 返回 JSON Schema 约束的结构化 JSON</li>
+ *   <li>流式结构化：POST /api/ai/diagnosis/structured/stream → SSE 逐 token + 最终完整结构</li>
  * </ul>
  */
 @RestController
@@ -26,61 +30,63 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class AiController {
 
     private final AiService aiService;
-
     private final AiStreamService aiStreamService;
+    private final AiStructuredService aiStructuredService;
 
-    public AiController(AiService aiService, AiStreamService aiStreamService) {
+    public AiController(AiService aiService, AiStreamService aiStreamService,
+                        AiStructuredService aiStructuredService) {
         this.aiService = aiService;
         this.aiStreamService = aiStreamService;
+        this.aiStructuredService = aiStructuredService;
     }
 
+    // ==================== 文本模式（兼容旧版） ====================
+
     /**
-     * 同步问诊（兼容旧版）：接收症状描述和历史对话，返回完整 AI 分析结果。
+     * 同步文本问诊：接收症状描述和历史对话，返回完整文本结果。
      */
     @PostMapping("/diagnosis")
-    public Result<Map<String, String>> askDiagnosis(@RequestBody Map<String, Object> request) {
-        String symptoms = (String) request.get("symptoms");
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> history = (List<Map<String, String>>) request.get("history");
-
-        if (symptoms == null || symptoms.trim().isEmpty()) {
-            return Result.error("请输入症状描述");
-        }
-
-        String aiResponse = aiService.askDiagnosis(symptoms.trim(), history);
+    public Result<Map<String, String>> askDiagnosis(@Valid @RequestBody AiDiagnosisRequest request) {
+        String aiResponse = aiService.askDiagnosis(
+                request.getSymptoms().trim(),
+                request.getHistory()
+        );
         Map<String, String> data = new HashMap<>();
         data.put("reply", aiResponse);
         return Result.ok(data);
     }
 
     /**
-     * 流式问诊（SSE）：接收症状描述和历史对话，通过 Server-Sent Events 逐 token 推送 AI 回复。
-     *
-     * <p>事件格式：
-     * <pre>{@code
-     *   event:token
-     *   data:头痛
-     *
-     *   event:token
-     *   data:可能
-     *
-     *   ...
-     *
-     *   event:done
-     *   data:完整回复内容
-     * }</pre>
-     *
-     * <p>前端通过 EventSource 或 fetch + ReadableStream 消费。
-     * SseEmitter 超时设为 60 秒，与 LLM API 超时对齐。
+     * SSE 流式文本问诊：逐 token 推送 AI 回复。
      */
     @PostMapping(value = "/diagnosis/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamDiagnosis(@RequestBody Map<String, Object> request) {
-        String symptoms = (String) request.get("symptoms");
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> history = (List<Map<String, String>>) request.get("history");
+    public SseEmitter streamDiagnosis(@Valid @RequestBody AiDiagnosisRequest request) {
+        String symptoms = request.getSymptoms().trim();
+        SseEmitter emitter = new SseEmitter(60_000L);
+        aiStreamService.streamDiagnosis(symptoms, request.getHistory(), emitter);
+        return emitter;
+    }
 
-        if (symptoms == null || symptoms.trim().isEmpty()) {
-            // 参数错误时仍需通过 SseEmitter 返回，保持 SSE 协议一致
+    // ==================== 结构化模式（JSON Schema） ====================
+
+    /**
+     * 同步结构化问诊：使用 JSON Schema 约束 LLM 输出，返回结构化的 {@link DiagnosisResult}。
+     */
+    @PostMapping("/diagnosis/structured")
+    public Result<DiagnosisResult> askDiagnosisStructured(@Valid @RequestBody AiDiagnosisRequest request) {
+        DiagnosisResult result = aiStructuredService.askDiagnosisStructured(
+                request.getSymptoms().trim(),
+                request.getHistory()
+        );
+        return Result.ok(result);
+    }
+
+    /**
+     * SSE 流式结构化问诊：逐 token 推送 + onDone 返回完整结构化 JSON。
+     */
+    @PostMapping(value = "/diagnosis/structured/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamStructuredDiagnosis(@RequestBody AiDiagnosisRequest request) {
+        if (request.getSymptoms() == null || request.getSymptoms().trim().isEmpty()) {
             SseEmitter errorEmitter = new SseEmitter(5000L);
             try {
                 errorEmitter.send(SseEmitter.event().name("error").data("请输入症状描述"));
@@ -90,20 +96,12 @@ public class AiController {
             }
             return errorEmitter;
         }
-
-        // 超时 60 秒，与 AI API 的 readTimeout 对齐
         SseEmitter emitter = new SseEmitter(60_000L);
-
-        // 注册回调：超时或异常时释放资源
-        emitter.onTimeout(() -> {
-            // SseEmitter 内部自动 complete，无需额外操作
-        });
-        emitter.onError(throwable -> {
-            // SseEmitter 内部自动 complete，无需额外操作
-        });
-
-        // 新开线程处理流式调用，避免阻塞 Tomcat 线程
-        aiStreamService.streamDiagnosis(symptoms.trim(), history, emitter);
+        aiStructuredService.streamStructuredDiagnosis(
+                request.getSymptoms().trim(),
+                request.getHistory(),
+                emitter
+        );
         return emitter;
     }
 }
