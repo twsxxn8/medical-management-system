@@ -6,6 +6,45 @@
 
 ## [未发布] — 2026-07
 
+### 新增 — feat/rate-limit（#3）
+
+**分支：** `feat/rate-limit` → `develop`  
+**提交：** `206f1f5`  
+**日期：** 2026-07-25  
+**类型：** Feature  
+**影响范围：** 全局接口限流
+
+#### 变更概述
+
+将 RateLimitFilter 从「Redis INCR 计数器模式」升级为「Redis Lua 令牌桶算法」，支持突发流量、多维度限流和 AI 接口独立策略。
+
+#### 变更文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `resources/lua/token_bucket.lua` | 新增 | Redis Lua 令牌桶原子脚本 |
+| `service/RateLimitLuaService.java` | 新增 | StringRedisTemplate 执行 Lua，多维度配置 |
+| `filter/RateLimitFilter.java` | 重写 | 从计数器升级为令牌桶，放行 auth 端点 |
+| `config/SecurityConfig.java` | 改 | RateLimitFilter 注入 RateLimitLuaService |
+
+#### 限流策略
+
+| 场景 | capacity | rate/s |
+|------|----------|--------|
+| 普通接口（IP） | 20 | 10 |
+| AI 接口（IP） | 5 | 2 |
+| 普通接口（用户） | 30 | 15 |
+| AI 接口（用户） | 8 | 3 |
+| API Key | 50 | 20 |
+
+#### 测试验证
+
+- [x] 6 次并发 AI 请求 → 第 6 次被限流（429）
+- [x] Redis 中令牌桶状态正确（tokens=0 after burst）
+- [x] 登录接口放行不限流
+
+---
+
 ### 新增 — feat/structured-output（#2）
 
 **分支：** `feat/structured-output` → `develop`  
