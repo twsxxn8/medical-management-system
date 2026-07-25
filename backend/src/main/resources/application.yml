@@ -34,11 +34,11 @@ app:
     secret: "${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}"
     expire-seconds: 7200
     issuer: "medical-system"
-  # AI 大模型配置（DeepSeek）
+  # AI 大模型配置（DeepSeek 官方 API）
   ai:
     api-key: "${AI_API_KEY}"
-    api-url: "${AI_API_URL:https://api.siliconflow.cn/v1/chat/completions}"
-    model: "${AI_MODEL:deepseek-ai/DeepSeek-V3}"
+    api-url: "${AI_API_URL:https://api.deepseek.com/v1/chat/completions}"
+    model: "${AI_MODEL:deepseek-v4-flash}"
   upload:
     path: "${UPLOAD_PATH:./uploads}"
   cors:
