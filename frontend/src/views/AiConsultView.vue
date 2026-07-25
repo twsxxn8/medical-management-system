@@ -61,6 +61,17 @@
               <div class="ai-summary">{{ msg.content }}</div>
             </div>
 
+            <!-- 缓存命中标记 -->
+            <el-tag
+              v-if="msg.role === 'assistant' && msg.cached && !msg.streaming"
+              size="small"
+              type="success"
+              effect="plain"
+              style="margin-top: 4px"
+            >
+              💾 缓存命中
+            </el-tag>
+
             <!-- 打字光标 -->
             <span v-if="msg.streaming" class="typing-cursor">|</span>
 
@@ -208,6 +219,8 @@ interface DisplayMessage extends ChatMessage {
   streaming?: boolean;
   /** 是否为结构化模式 */
   structured?: boolean;
+  /** 是否来自语义缓存 */
+  cached?: boolean;
   /** 结构化字段（来自 DiagnosisResult） */
   diseases?: { name: string; probability: string; description: string }[];
   checks?: string[];
@@ -245,7 +258,7 @@ function handleSend() {
   streaming.value = true;
 
   // 创建 AI 占位消息
-  const aiMsg: DisplayMessage = { role: "assistant", content: "", streaming: true, structured: true };
+  const aiMsg: DisplayMessage = { role: "assistant", content: "", streaming: true, structured: true, cached: false };
   messages.value.push(aiMsg);
   scrollToBottom();
 
@@ -265,6 +278,9 @@ function handleSend() {
       if (!aiMsg.content && token === "\n") return;
       aiMsg.content += token;
       scrollToBottom();
+    },
+    onCacheHit(fromCache: boolean) {
+      aiMsg.cached = fromCache;
     },
     onDone(fullContent: string) {
       // 去除可能的 markdown 代码块包裹
