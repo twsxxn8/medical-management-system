@@ -6,11 +6,18 @@
           <div class="title">
             <el-icon><Monitor /></el-icon>
             <span>AI 智能问诊助手</span>
+            <el-tag size="small" type="success" effect="plain" style="margin-left: 8px">SSE 流式</el-tag>
           </div>
-          <el-button type="danger" link size="small" @click="clearChat">
-            <el-icon><Delete /></el-icon>
-            清空对话
-          </el-button>
+          <div class="header-actions">
+            <el-button v-if="streaming" type="warning" link size="small" @click="stopStreaming">
+              <el-icon><VideoPause /></el-icon>
+              停止生成
+            </el-button>
+            <el-button type="danger" link size="small" @click="clearChat">
+              <el-icon><Delete /></el-icon>
+              清空对话
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -48,8 +55,14 @@
           <div class="message-content">
             <div class="message-bubble" v-html="formatMarkdown(msg.content)"></div>
 
-            <!-- 结构化卡片：仅对 AI 第一条回复解析 -->
-            <div v-if="msg.role === 'assistant' && index === firstAiIndex" class="structured-cards">
+            <!-- 流式生成中：显示闪烁光标 -->
+            <span v-if="msg.streaming" class="typing-cursor">|</span>
+
+            <!-- 结构化卡片：仅在流式完成后对 AI 第一条回复解析 -->
+            <div
+              v-if="msg.role === 'assistant' && !msg.streaming && index === firstAiIndex"
+              class="structured-cards"
+            >
               <el-row :gutter="12">
                 <el-col :span="12">
                   <el-card class="struct-card" shadow="never">
@@ -60,7 +73,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '可能的疾病方向')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '可能疾病方向|可能的疾病方向')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -73,7 +86,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '建议的检查项目')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '建议的检查项目|建议检查项目|建议检查')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -87,7 +100,7 @@
                         <span>建议就诊科室</span>
                       </div>
                     </template>
-                    <div class="dept-text">{{ parseSection(msg.content, '建议就诊的科室') }}</div>
+                    <div class="dept-text">{{ parseSection(msg.content, "就诊的科室|就诊科室|就诊") }}</div>
                   </el-card>
                 </el-col>
                 <el-col :span="12">
@@ -99,7 +112,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '日常注意事项')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '日常注意事项|注意事项|日常')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -114,19 +127,6 @@
             </div>
           </div>
         </div>
-
-        <!-- AI 正在输入提示 -->
-        <div v-if="loading" class="message-row ai-row">
-          <div class="avatar">
-            <el-avatar :size="36" :icon="FirstAidKit" />
-          </div>
-          <div class="message-content">
-            <div class="message-bubble loading-bubble">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>AI 正在分析中...</span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- 输入区 -->
@@ -138,13 +138,13 @@
           placeholder="请描述您的症状，例如：最近三天头痛、发热38度，伴有咳嗽和乏力..."
           maxlength="500"
           show-word-limit
-          :disabled="loading"
+          :disabled="streaming"
           @keydown.enter.prevent="handleSend"
         />
         <el-button
           type="primary"
-          :loading="loading"
-          :disabled="!inputText.trim() || loading"
+          :loading="streaming"
+          :disabled="!inputText.trim() || streaming"
           @click="handleSend"
         >
           发送
@@ -169,16 +169,23 @@ import {
   InfoFilled,
   WarningFilled,
   CopyDocument,
-  Loading,
-  Delete
+  Delete,
+  VideoPause
 } from "@element-plus/icons-vue";
 import { aiApi, type ChatMessage } from "../api/ai";
 import { ElMessage } from "element-plus";
 
-const messages = ref<ChatMessage[]>([]);
+/** 消息列表（含 streaming 标记） */
+interface DisplayMessage extends ChatMessage {
+  /** 该消息是否正在流式生成中 */
+  streaming?: boolean;
+}
+
+const messages = ref<DisplayMessage[]>([]);
 const inputText = ref("");
-const loading = ref(false);
+const streaming = ref(false);
 const chatBox = ref<HTMLElement | null>(null);
+let currentAbortController: AbortController | null = null;
 
 const quickSymptoms = [
   "头痛、头晕",
@@ -189,34 +196,82 @@ const quickSymptoms = [
   "关节疼痛"
 ];
 
-const firstAiIndex = computed(() => messages.value.findIndex(m => m.role === "assistant"));
+const firstAiIndex = computed(() =>
+  messages.value.findIndex(m => m.role === "assistant" && !m.streaming)
+);
 
 function selectQuickSymptom(text: string) {
   inputText.value = text + "，请问可能是什么问题？";
 }
 
-async function handleSend() {
+function handleSend() {
   const text = inputText.value.trim();
-  if (!text || loading.value) return;
+  if (!text || streaming.value) return;
 
+  // 添加用户消息
   messages.value.push({ role: "user", content: text });
   inputText.value = "";
-  loading.value = true;
+  streaming.value = true;
+
+  // 创建 AI 占位消息（streaming = true）
+  const aiMsg: DisplayMessage = { role: "assistant", content: "", streaming: true };
+  messages.value.push(aiMsg);
   scrollToBottom();
 
-  try {
-    const history = messages.value.filter(m => m.role !== "assistant" || m !== messages.value[messages.value.length - 1]);
-    const reply = await aiApi.askDiagnosis(text, history);
-    messages.value.push({ role: "assistant", content: reply });
-  } catch (e: any) {
-    messages.value.push({ role: "assistant", content: "请求失败：" + (e.message || "未知错误") });
-  } finally {
-    loading.value = false;
-    nextTick(scrollToBottom);
+  // 构建历史（排除当前正在流式生成的占位消息）
+  const history: ChatMessage[] = [];
+  for (const m of messages.value) {
+    if (m.streaming) continue; // 跳过当前流式消息
+    history.push({ role: m.role, content: m.content });
   }
+
+  // 流式调用
+  currentAbortController = aiApi.streamDiagnosis(text, history, {
+    onToken(token: string) {
+      aiMsg.content += token;
+      scrollToBottom();
+    },
+    onDone(fullContent: string) {
+      aiMsg.content = fullContent;
+      aiMsg.streaming = false;
+      streaming.value = false;
+      currentAbortController = null;
+    },
+    onError(message: string) {
+      if (aiMsg.content) {
+        // 已有部分内容，追加错误提示
+        aiMsg.content += "\n\n[流中断: " + message + "]";
+      } else {
+        aiMsg.content = "请求失败：" + message;
+      }
+      aiMsg.streaming = false;
+      streaming.value = false;
+      currentAbortController = null;
+      ElMessage.error(message);
+    }
+  });
+}
+
+function stopStreaming() {
+  if (currentAbortController) {
+    currentAbortController.abort();
+    currentAbortController = null;
+  }
+  // 将最后一个流式消息标记为完成
+  const lastMsg = messages.value[messages.value.length - 1];
+  if (lastMsg && lastMsg.streaming) {
+    lastMsg.streaming = false;
+    if (lastMsg.content) {
+      lastMsg.content += "\n\n[用户中断]";
+    } else {
+      lastMsg.content = "[已中断]";
+    }
+  }
+  streaming.value = false;
 }
 
 function clearChat() {
+  stopStreaming();
   messages.value = [];
   inputText.value = "";
 }
@@ -228,12 +283,16 @@ function copyReply(text: string) {
 }
 
 function scrollToBottom() {
-  if (chatBox.value) {
-    chatBox.value.scrollTop = chatBox.value.scrollHeight;
-  }
+  nextTick(() => {
+    if (chatBox.value) {
+      chatBox.value.scrollTop = chatBox.value.scrollHeight;
+    }
+  });
 }
 
-watch(messages, () => nextTick(scrollToBottom), { deep: true });
+watch(messages, () => scrollToBottom(), { deep: true });
+
+/* ===== 文本格式化（同旧版） ===== */
 
 function formatMarkdown(text: string): string {
   return text
@@ -245,33 +304,63 @@ function formatMarkdown(text: string): string {
     .replace(/\n/g, "<br>");
 }
 
-function parseSection(text: string, sectionName: string): string {
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(sectionName)) {
-      const next = lines[i + 1];
-      if (next && !next.includes("：") && !next.includes("建议") && !next.includes("注意")) {
-        return next.replace(/^[-*\d.\s]+/, "").trim();
+/** 通用段落级解析：匹配 sectionName（支持 | 分隔的多关键词） */
+function parseSection(text: string, sectionNames: string): string {
+  const normalized = text.replace(/###\s*/g, "");
+  const lines = normalized.split("\n");
+  const keywords = sectionNames.split("|");
+  let inTarget = false;
+  const result: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const matched = keywords.some(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(trimmed));
+    if (matched) {
+      inTarget = true;
+      continue;
+    }
+
+    if (inTarget && /^#{1,3}\s/.test(trimmed)) break;
+    if (inTarget && /^[可能|建议|日常|就诊|推荐|注意|免责|声明|以上]/.test(trimmed)) break;
+
+    if (inTarget) {
+      const cleaned = trimmed.replace(/^\d+[\.\)、]\s*/, "").replace(/^[-*]\s*/, "");
+      if (cleaned && !cleaned.startsWith("##") && !cleaned.startsWith("---")) {
+        result.push(cleaned);
       }
     }
   }
-  return "详见上方分析";
+  return result.length ? result.join(" / ") : "详见上方分析";
 }
 
-function parseList(text: string, sectionName: string): string[] {
-  const lines = text.split("\n");
+/** 从文本中提取指定标题下的列表项（编号行） */
+function parseList(text: string, sectionNames: string): string[] {
+  const normalized = text.replace(/###\s*/g, "");
+  const lines = normalized.split("\n");
+  const keywords = sectionNames.split("|");
   const result: string[] = [];
-  let inSection = false;
+  let inTarget = false;
   for (const line of lines) {
-    if (line.includes(sectionName)) {
-      inSection = true;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const matched = keywords.some(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(trimmed));
+    if (matched) {
+      inTarget = true;
       continue;
     }
-    if (inSection) {
-      if (/^\s*\d+\.\s|^\s*[-*]\s/.test(line)) {
-        result.push(line.replace(/^\s*\d+\.\s|^\s*[-*]\s/, "").trim());
-      } else if (line.trim() === "" || line.includes("：")) {
-        break;
+
+    if (inTarget && /^#{1,3}\s/.test(trimmed)) break;
+    if (inTarget && /^[可能|建议|日常|就诊|推荐|注意|免责|声明|以上]/.test(trimmed)) break;
+
+    if (inTarget) {
+      const cleaned = trimmed
+        .replace(/^\d+[\.\)、]\s*/, "")
+        .replace(/^[-*]\s*/, "")
+        .replace(/^[：:]/, "");
+      if (cleaned && !cleaned.startsWith("##") && !cleaned.startsWith("---")) {
+        result.push(cleaned);
       }
     }
   }
@@ -311,6 +400,11 @@ function parseList(text: string, sectionName: string): string[] {
   gap: 8px;
   font-size: 18px;
   font-weight: bold;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .quick-symptoms {
@@ -381,11 +475,18 @@ function parseList(text: string, sectionName: string): string[] {
   color: #ffffff;
 }
 
-.loading-bubble {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #909399;
+/* 打字光标闪烁动画 */
+.typing-cursor {
+  display: inline;
+  color: #409eff;
+  font-weight: bold;
+  font-size: 16px;
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
 }
 
 .structured-cards {
@@ -446,5 +547,4 @@ function parseList(text: string, sectionName: string): string[] {
   height: 54px;
   width: 90px;
 }
-
 </style>
