@@ -9,7 +9,7 @@
 ### 新增 — feat/ai-streaming（#1）
 
 **分支：** `feat/ai-streaming` → `develop`  
-**提交：** `d2a54e3`  
+**提交：** `d2a54e3`（核心代码）、`8747add`（文档）、`<待提交>`（修复）  
 **日期：** 2026-07-25  
 **类型：** Feature  
 **影响范围：** AI 问诊模块
@@ -80,11 +80,33 @@ Response (SSE):
 
 #### 测试验证
 
-- [ ] 正常流式问诊：输入症状 → AI 逐字生成 → 完成后展示结构化卡片
-- [ ] 停止生成：流式过程中点击「停止」→ 中断请求 → 显示 `[用户中断]`
+- [x] 正常流式问诊：输入症状 → AI 逐字生成 → 完成后展示结构化卡片
+- [x] 停止生成：流式过程中点击「停止」→ 中断请求 → 显示 `[用户中断]`
 - [ ] 网络异常：断网或 API 超时 → 显示错误提示
-- [ ] 空输入：symptoms 为空 → 返回错误事件
-- [ ] 同步接口兼容：`POST /api/ai/diagnosis` 仍正常工作
+- [x] 空输入：symptoms 为空 → 返回错误事件
+- [x] 同步接口兼容：`POST /api/ai/diagnosis` 仍正常工作
+
+#### Bug 修复
+
+**BugFix — 前端结构化卡片解析失效（DeepSeek V4 输出格式变更）**
+
+- **问题：** DeepSeek V4（`deepseek-v4-flash`）输出格式与 V3 不同，使用 `### 标题` 替代纯文本标题行，且标题措辞有变化（如"可能疾病方向"替代"可能的疾病方向"），导致前端 `parseSection()` / `parseList()` 正则匹配失败，所有结构化卡片显示"详见上方分析"
+- **修复：**
+  - 重写 `parseSection()` 和 `parseList()`：支持 `###` 过滤、多关键词备选（`|` 分隔）、遇到下一个标题自动停止
+  - 模板中的 sectionName 参数改为多关键词格式（如 `"可能疾病方向|可能的疾病方向"`）
+- **影响文件：** `frontend/src/views/AiConsultView.vue`
+
+**BugFix — 移除 spring-boot-starter-webflux 依赖**
+
+- **问题：** 引入 WebFlux 后与 Spring MVC Jackson 产生冲突，导致 `@RequestBody Map` 解析 UTF-8 字符失败（`Invalid UTF-8 middle byte 0xdb`），中文字符场景返回 400
+- **修复：** 从 `pom.xml` 移除 `spring-boot-starter-webflux`；SSE 流式基于原生 `HttpURLConnection`，不依赖 WebFlux
+- **影响文件：** `backend/pom.xml`、`backend/src/main/resources/application.yml`
+
+**配置变更 — API 端点迁移**
+
+- **变更：** AI 默认 API 从硅基流动（`api.siliconflow.cn`）切换至 DeepSeek 官方（`api.deepseek.com`），模型从 `deepseek-ai/DeepSeek-V3` 更新为 `deepseek-v4-flash`
+- **原因：** 用户提供的硅基流动 API Key 验证失败（错误码 30014），DeepSeek 官方 API 验证通过
+- **影响文件：** `backend/src/main/resources/application.yml`
 
 ---
 

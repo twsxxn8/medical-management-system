@@ -73,7 +73,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '可能的疾病方向')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '可能疾病方向|可能的疾病方向')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -86,7 +86,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '建议的检查项目')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '建议的检查项目|建议检查项目|建议检查')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -100,7 +100,7 @@
                         <span>建议就诊科室</span>
                       </div>
                     </template>
-                    <div class="dept-text">{{ parseSection(msg.content, '建议就诊的科室') }}</div>
+                    <div class="dept-text">{{ parseSection(msg.content, "就诊的科室|就诊科室|就诊") }}</div>
                   </el-card>
                 </el-col>
                 <el-col :span="12">
@@ -112,7 +112,7 @@
                       </div>
                     </template>
                     <ul>
-                      <li v-for="(d, i) in parseList(msg.content, '日常注意事项')" :key="i">{{ d }}</li>
+                      <li v-for="(d, i) in parseList(msg.content, '日常注意事项|注意事项|日常')" :key="i">{{ d }}</li>
                     </ul>
                   </el-card>
                 </el-col>
@@ -304,33 +304,63 @@ function formatMarkdown(text: string): string {
     .replace(/\n/g, "<br>");
 }
 
-function parseSection(text: string, sectionName: string): string {
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(sectionName)) {
-      const next = lines[i + 1];
-      if (next && !next.includes("：") && !next.includes("建议") && !next.includes("注意")) {
-        return next.replace(/^[-*\d.\s]+/, "").trim();
+/** 通用段落级解析：匹配 sectionName（支持 | 分隔的多关键词） */
+function parseSection(text: string, sectionNames: string): string {
+  const normalized = text.replace(/###\s*/g, "");
+  const lines = normalized.split("\n");
+  const keywords = sectionNames.split("|");
+  let inTarget = false;
+  const result: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const matched = keywords.some(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(trimmed));
+    if (matched) {
+      inTarget = true;
+      continue;
+    }
+
+    if (inTarget && /^#{1,3}\s/.test(trimmed)) break;
+    if (inTarget && /^[可能|建议|日常|就诊|推荐|注意|免责|声明|以上]/.test(trimmed)) break;
+
+    if (inTarget) {
+      const cleaned = trimmed.replace(/^\d+[\.\)、]\s*/, "").replace(/^[-*]\s*/, "");
+      if (cleaned && !cleaned.startsWith("##") && !cleaned.startsWith("---")) {
+        result.push(cleaned);
       }
     }
   }
-  return "详见上方分析";
+  return result.length ? result.join(" / ") : "详见上方分析";
 }
 
-function parseList(text: string, sectionName: string): string[] {
-  const lines = text.split("\n");
+/** 从文本中提取指定标题下的列表项（编号行） */
+function parseList(text: string, sectionNames: string): string[] {
+  const normalized = text.replace(/###\s*/g, "");
+  const lines = normalized.split("\n");
+  const keywords = sectionNames.split("|");
   const result: string[] = [];
-  let inSection = false;
+  let inTarget = false;
   for (const line of lines) {
-    if (line.includes(sectionName)) {
-      inSection = true;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const matched = keywords.some(k => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(trimmed));
+    if (matched) {
+      inTarget = true;
       continue;
     }
-    if (inSection) {
-      if (/^\s*\d+\.\s|^\s*[-*]\s/.test(line)) {
-        result.push(line.replace(/^\s*\d+\.\s|^\s*[-*]\s/, "").trim());
-      } else if (line.trim() === "" || line.includes("：")) {
-        break;
+
+    if (inTarget && /^#{1,3}\s/.test(trimmed)) break;
+    if (inTarget && /^[可能|建议|日常|就诊|推荐|注意|免责|声明|以上]/.test(trimmed)) break;
+
+    if (inTarget) {
+      const cleaned = trimmed
+        .replace(/^\d+[\.\)、]\s*/, "")
+        .replace(/^[-*]\s*/, "")
+        .replace(/^[：:]/, "");
+      if (cleaned && !cleaned.startsWith("##") && !cleaned.startsWith("---")) {
+        result.push(cleaned);
       }
     }
   }
