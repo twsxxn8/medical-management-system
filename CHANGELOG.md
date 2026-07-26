@@ -6,6 +6,110 @@
 
 ## [未发布] — 2026-07
 
+### 新增 — feat/rate-limit（#3）
+
+**分支：** `feat/rate-limit` → `develop`
+**提交：** `206f1f5`
+**日期：** 2026-07-25
+**类型：** Feature
+**影响范围：** 全局限流
+
+#### 变更概述
+
+将 IP 计数器限流升级为 Redis Lua 令牌桶算法，支持突发流量和 AI 接口独立限流策略。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 行数 | 说明 |
+|------|------|------|------|
+| `backend/.../service/RateLimitLuaService.java` | 新增 | +96 | 多维令牌桶服务（ip/user/apikey × default/ai） |
+| `backend/.../lua/token_bucket.lua` | 新增 | +50 | Redis Lua 令牌桶原子脚本 |
+| `backend/.../filter/RateLimitFilter.java` | 修改 | 重写 | 从 INCR 计数器升级为令牌桶 |
+| `backend/.../config/SecurityConfig.java` | 修改 | -19 | 简化限流相关安全配置 |
+
+#### API 变更
+
+**响应头（所有端点）：**
+```
+X-RateLimit-Remaining: 19
+X-RateLimit-Retry-After: 0
+```
+
+**限流策略：**
+- 默认：capacity=20, rate=10/s
+- AI 接口：capacity=5, rate=2/s
+- 登录注册（`/api/auth/**`）：不限流
+
+#### 关键技术点
+
+- **令牌桶算法：** Redis Lua 脚本保证原子性，支持突发流量（桶容量 > 填充速率）
+- **多维度限流：** 支持按 IP、用户、API Key 维度独立配置
+- **AI 接口识别：** Filter 自动识别 `/api/ai/**` 路径并应用严格策略
+- **标准响应头：** `X-RateLimit-Remaining` / `X-RateLimit-Retry-After` 对齐 HTTP 429 规范
+
+#### 测试验证
+
+- [x] 6 次并发请求 AI 接口 → 第 6 次被限流 (429)，桶内 tokens=0
+- [x] Redis 中令牌桶状态正常（`HGETALL token:bucket:ip:...`）
+
+---
+
+### 新增 — feat/semantic-cache（#4）
+
+**分支：** `feat/semantic-cache` → `develop`
+**提交：** `cc3fd90`
+**日期：** 2026-07-25
+**类型：** Feature
+**影响范围：** AI 问诊缓存
+
+#### 变更概述
+
+在 LLM 调用前通过 Embedding 向量化用户症状，与 Redis 缓存做余弦相似度匹配。超过阈值直接返回缓存结果，减少 LLM API 调用和费用。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 行数 | 说明 |
+|------|------|------|------|
+| `backend/.../service/SemanticCacheService.java` | 新增 | +532 | 语义缓存核心服务（check/store/stream） |
+| `backend/.../service/EmbeddingService.java` | 新增 | +134 | DeepSeek Embedding API 调用 |
+| `backend/.../dto/CachedDiagnosisResult.java` | 新增 | +80 | 缓存包装 DTO（含相似度/原始词） |
+| `backend/.../lua/semantic_cache_evict.lua` | 新增 | +24 | Redis Lua 原子 LRU 淘汰脚本 |
+| `backend/.../controller/AiController.java` | 修改 | +37 | /structured 端点集成缓存层（X-Cache 头） |
+| `backend/.../filter/RateLimitFilter.java` | 修改 | +9 | Redis 不可用时 fail-open |
+| `backend/.../filter/JwtAuthenticationFilter.java` | 修改 | +21 | Redis 不可用时 fail-open |
+| `frontend/src/api/ai.ts` | 修改 | +4 | DisplayMessage.cached 字段 |
+| `frontend/src/views/AiConsultView.vue` | 修改 | +18 | 💾 缓存命中标签 |
+
+#### API 变更
+
+**响应头：**
+```
+X-Cache: HIT / MISS
+```
+
+**缓存命中时额外 SSE 事件：**
+```
+event:fromCache    data:true
+```
+
+#### 关键技术点
+
+- **两层匹配策略：** 优先 Embedding 余弦相似度（阈值 0.88），Embedding API 不可用时自动降级为字符 Jaccard 相似度（阈值 0.55）
+- **LRU 淘汰：** Redis Lua 原子脚本淘汰最旧条目，maxEntries=1000
+- **Fail-open 设计：** Redis 不可用时缓存静默跳过，不影响正常问诊流程
+- **定期清理：** 每 50 次存储触发一次 stale 条目清理
+- **前端缓存标识：** 消息增加 `cached` 字段，缓存命中时显示 "💾 缓存命中" 标签
+
+#### 测试验证
+
+- [x] Embedding API 正常调用，返回 1024 维 float 向量
+- [x] 余弦相似度匹配正常（"头痛发热" vs "头疼发烧" → 高相似度命中）
+- [x] Embedding API 不可用时自动降级为文本 Jaccard 匹配
+- [x] Redis 不可用时 fail-open，问诊正常进行
+- [x] LRU 淘汰：超过 maxEntries 时最旧条目被原子淘汰
+
+---
+
 ### 新增 — feat/structured-output（#2）
 
 **分支：** `feat/structured-output` → `develop`  
