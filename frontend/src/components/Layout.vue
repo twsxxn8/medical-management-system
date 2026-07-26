@@ -72,6 +72,11 @@
           <el-icon><ChatDotRound /></el-icon>
           <span>AI 智能问诊</span>
         </el-menu-item>
+        <!-- AI 智能聊天：所有人可见 -->
+        <el-menu-item index="/ai-chat">
+          <el-icon><ChatLineSquare /></el-icon>
+          <span>AI 智能聊天</span>
+        </el-menu-item>
 
       </el-menu>
     </el-aside>
@@ -96,7 +101,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
-import { OfficeBuilding, User, UserFilled, Calendar, FirstAidKit, Notebook, Tickets, Document, SwitchButton, ChatDotRound } from '@element-plus/icons-vue';
+import { OfficeBuilding, User, UserFilled, Calendar, FirstAidKit, Notebook, Tickets, Document, SwitchButton, ChatDotRound, ChatLineSquare } from '@element-plus/icons-vue';
 import { clearAuth, getRole } from "../utils/authStorage";
 
 const router = useRouter();
