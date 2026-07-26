@@ -6,6 +6,93 @@
 
 ## [未发布] — 2026-07
 
+---
+
+### 新增 — feat/ai-chat（#5）
+
+**分支：** `feat/ai-chat` → `develop`
+**提交：** `215b984`
+**日期：** 2026-07-26
+**类型：** Feature
+**影响范围：** AI 聊天模块
+
+#### 变更概述
+
+新增 AI 多轮聊天对话功能，支持 SSE 流式回复、对话会话持久化（DB）、ChatGPT 风格布局（对话列表侧边栏 + 聊天区域）。与现有 AI 问诊模块独立运行，共享 JWT 认证和限流保护。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 行数 | 说明 |
+|------|------|------|------|
+| `backend/.../Entity/ChatConversationEntity.java` | 新增 | +76 | 会话表 JPA 实体 |
+| `backend/.../Entity/ChatMessageEntity.java` | 新增 | +70 | 消息表 JPA 实体 |
+| `backend/.../repository/ChatConversationRepository.java` | 新增 | +22 | 会话 Repository (按用户查询、归属验证删除) |
+| `backend/.../repository/ChatMessageRepository.java` | 新增 | +21 | 消息 Repository (按时序查询、级联删除) |
+| `backend/.../dto/ChatRequest.java` | 新增 | +31 | 聊天请求 DTO (conversationId nullable + @NotBlank message) |
+| `backend/.../dto/ChatConversationResponse.java` | 新增 | +64 | 对话列表响应 DTO (含 lastMessage 摘要) |
+| `backend/.../service/ChatService.java` | 新增 | +365 | 核心服务：SSE 流式聊天 + 同步后备 + 对话 CRUD |
+| `backend/.../controller/ChatController.java` | 新增 | +106 | REST 控制器：/chat, /chat/stream, /conversations, ... |
+| `frontend/src/views/AiChatView.vue` | 新增 | +390 | 聊天 UI：对话列表 + 聊天区 + 打字机效果 |
+| `frontend/src/api/ai.ts` | 修改 | +165 | 追加 chatApi (5 个方法) + streamChatSse() |
+| `frontend/src/router/index.ts` | 修改 | +3 | 追加 /ai-chat 路由 |
+| `frontend/src/components/Layout.vue` | 修改 | +6 | 追加 "AI 智能聊天" 侧边菜单 |
+| `SQL_Server.sql` | 修改 | +28 | 追加 chat_conversation + chat_message DDL |
+
+#### DB 变更
+
+**新增表：**
+
+```sql
+CREATE TABLE chat_conversation (
+    id BIGINT PRIMARY KEY IDENTITY, user_id BIGINT NOT NULL,
+    title NVARCHAR(200), create_time DATETIME2, update_time DATETIME2
+);
+CREATE TABLE chat_message (
+    id BIGINT PRIMARY KEY IDENTITY, conversation_id BIGINT NOT NULL,
+    role NVARCHAR(20), content NVARCHAR(MAX), create_time DATETIME2,
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversation(id) ON DELETE CASCADE
+);
+```
+
+#### API 变更
+
+**新增端点：**
+
+```
+POST   /api/ai/chat                       # 同步聊天 → {conversationId, reply}
+POST   /api/ai/chat/stream                # SSE 流式聊天 → token/done/error
+GET    /api/ai/conversations              # 对话列表 → ChatConversationResponse[]
+DELETE /api/ai/conversations/{id}         # 删除对话
+GET    /api/ai/conversations/{id}/messages # 获取历史消息
+```
+
+**SSE 事件格式（与诊断模块一致）：**
+```
+event:token     data:文字
+event:done      data:{"conversationId":42,"reply":"完整回复..."}
+event:error     data:错误信息
+```
+
+#### 关键技术点
+
+- **Service 复用：** ChatService 完全复用 AiStreamService 的 HttpURLConnection + SSE chunk 解析模式，不引入 WebClient
+- **上下文截断：** 最多保留最近 40 条历史消息传入 LLM，超长对话自动截断并标记
+- **自动标题：** 新建对话时自动截取首条消息前 50 字符作为标题
+- **数据隔离：** 所有 Repository 查询带 userId 条件，用户只能操作自己的对话
+- **Fail-soft：** DB 写入失败不阻塞流式响应
+- **限流与安全：** `/api/ai/**` 已继承 JWT 认证 + ip_ai 令牌桶 (capacity=5, rate=2/s)，无需额外配置
+
+#### 测试验证
+
+- [x] 多轮对话：连续 5 轮消息，AI 正确记住前文
+- [x] SSE 流式：逐字推送打字机效果正常
+- [x] 中断恢复：流式中点击"停止"正确中断并保存已生成内容
+- [x] 对话管理：创建/切换/删除对话，刷新页面后消息持久化
+- [x] 数据隔离：用户 A 无法访问用户 B 的对话
+- [x] 现有功能不受影响：AiConsultView 诊断功能正常
+
+---
+
 ### 新增 — feat/rate-limit（#3）
 
 **分支：** `feat/rate-limit` → `develop`
