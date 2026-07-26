@@ -28,6 +28,8 @@ export interface StreamCallbacks {
   onToken: (token: string) => void;
   onDone: (fullContent: string) => void;
   onError: (message: string) => void;
+  /** 缓存命中回调（fromCache SSE 事件触发） */
+  onCacheHit?: (fromCache: boolean) => void;
 }
 
 export const aiApi = {
@@ -138,6 +140,8 @@ function streamSse(
             callbacks.onToken(eventData);
           } else if (eventName === "done" && eventData) {
             callbacks.onDone(eventData);
+          } else if (eventName === "fromCache" && eventData) {
+            callbacks.onCacheHit?.(eventData === "true");
           } else if (eventName === "error") {
             callbacks.onError(eventData || "AI 服务调用失败");
           }

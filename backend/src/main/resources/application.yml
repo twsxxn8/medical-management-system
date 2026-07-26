@@ -44,6 +44,15 @@ app:
     api-key: "${AI_API_KEY}"
     api-url: "${AI_API_URL:https://api.deepseek.com/v1/chat/completions}"
     model: "${AI_MODEL:deepseek-v4-flash}"
+    # 语义缓存配置
+    semantic-cache:
+      enabled: true
+      threshold: 0.88
+      ttl-seconds: 3600
+      max-entries: 1000
+    # Embedding API 配置
+    embedding-url: "${AI_EMBEDDING_URL:https://api.deepseek.com/v1/embeddings}"
+    embedding-model: "${AI_EMBEDDING_MODEL:deepseek-chat}"
   upload:
     path: "${UPLOAD_PATH:./uploads}"
   cors:

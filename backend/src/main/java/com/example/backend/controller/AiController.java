@@ -6,8 +6,10 @@ import com.example.backend.dto.DiagnosisResult;
 import com.example.backend.service.AiService;
 import com.example.backend.service.AiStructuredService;
 import com.example.backend.service.AiStreamService;
+import com.example.backend.service.SemanticCacheService;
 import java.util.HashMap;
 import java.util.Map;
+import javax.servlet.http.HttpServletResponse;
 import javax.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,12 +34,15 @@ public class AiController {
     private final AiService aiService;
     private final AiStreamService aiStreamService;
     private final AiStructuredService aiStructuredService;
+    private final SemanticCacheService semanticCacheService;
 
     public AiController(AiService aiService, AiStreamService aiStreamService,
-                        AiStructuredService aiStructuredService) {
+                        AiStructuredService aiStructuredService,
+                        SemanticCacheService semanticCacheService) {
         this.aiService = aiService;
         this.aiStreamService = aiStreamService;
         this.aiStructuredService = aiStructuredService;
+        this.semanticCacheService = semanticCacheService;
     }
 
     // ==================== 文本模式（兼容旧版） ====================
@@ -71,18 +76,38 @@ public class AiController {
 
     /**
      * 同步结构化问诊：使用 JSON Schema 约束 LLM 输出，返回结构化的 {@link DiagnosisResult}。
+     * 支持语义缓存：相似症状命中缓存时直接返回，减少 LLM API 调用。
      */
     @PostMapping("/diagnosis/structured")
-    public Result<DiagnosisResult> askDiagnosisStructured(@Valid @RequestBody AiDiagnosisRequest request) {
+    public Result<DiagnosisResult> askDiagnosisStructured(
+            @Valid @RequestBody AiDiagnosisRequest request,
+            HttpServletResponse response) {
+        String symptoms = request.getSymptoms().trim();
+
+        // 1. 检查语义缓存
+        SemanticCacheService.CacheResult cacheResult = semanticCacheService.check(symptoms);
+
+        if (cacheResult.isHit()) {
+            response.setHeader("X-Cache", "HIT");
+            response.setHeader("X-Cache-Similarity",
+                    String.format("%.4f", cacheResult.getSimilarityScore()));
+            return Result.ok(cacheResult.getData().getResult());
+        }
+
+        // 2. 缓存未命中：调用 LLM
+        response.setHeader("X-Cache", "MISS");
         DiagnosisResult result = aiStructuredService.askDiagnosisStructured(
-                request.getSymptoms().trim(),
-                request.getHistory()
-        );
+                symptoms, request.getHistory());
+
+        // 3. 存入缓存（最佳努力，失败不影响响应）
+        semanticCacheService.store(symptoms, result);
+
         return Result.ok(result);
     }
 
     /**
      * SSE 流式结构化问诊：逐 token 推送 + onDone 返回完整结构化 JSON。
+     * 支持语义缓存：命中时直接返回缓存的 DiagnosisResult。
      */
     @PostMapping(value = "/diagnosis/structured/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamStructuredDiagnosis(@RequestBody AiDiagnosisRequest request) {
@@ -97,7 +122,7 @@ public class AiController {
             return errorEmitter;
         }
         SseEmitter emitter = new SseEmitter(60_000L);
-        aiStructuredService.streamStructuredDiagnosis(
+        semanticCacheService.checkAndStreamOrDelegate(
                 request.getSymptoms().trim(),
                 request.getHistory(),
                 emitter
