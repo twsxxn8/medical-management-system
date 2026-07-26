@@ -53,6 +53,34 @@ app:
     # Embedding API 配置
     embedding-url: "${AI_EMBEDDING_URL:https://api.deepseek.com/v1/embeddings}"
     embedding-model: "${AI_EMBEDDING_MODEL:deepseek-chat}"
+
+# ==================== 熔断器配置（Resilience4j） ====================
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      sliding-window-type: COUNT_BASED
+      sliding-window-size: 10
+      minimum-number-of-calls: 5
+      failure-rate-threshold: 50
+      wait-duration-in-open-state: 30s
+      permitted-number-of-calls-in-half-open-state: 2
+      automatic-transition-from-open-to-half-open-enabled: true
+      record-exceptions:
+        - java.net.SocketTimeoutException
+        - java.net.ConnectException
+        - java.io.IOException
+        - org.springframework.web.client.ResourceAccessException
+    llm-stream:
+      slow-call-duration-threshold: 60s
+      slow-call-rate-threshold: 50
+  instances:
+    deepseek-chat:
+      base-config: default
+    deepseek-chat-stream:
+      base-config: llm-stream
+    deepseek-embedding:
+      base-config: default
+      failure-rate-threshold: 30
   upload:
     path: "${UPLOAD_PATH:./uploads}"
   cors:

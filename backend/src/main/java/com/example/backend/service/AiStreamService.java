@@ -26,9 +26,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *       开启 {@code stream: true}，逐行读取 SSE chunk</li>
  *   <li>每收到一个 delta token，立即通过 {@link SseEmitter#send(Object)} 推送给前端，
  *       实现打字机效果</li>
- *   <li>前端断开连接（如刷新页面）时，捕获 IOException 后关闭上游 HTTP 连接，
- *       避免资源泄露</li>
- *   <li>超时时间设为 60 秒，兼容长回复场景</li>
+ *   <li>熔断保护：调用前检查 deepseek-chat-stream CircuitBreaker 状态，OPEN 时快速失败</li>
  * </ul>
  */
 @Service
@@ -46,15 +44,22 @@ public class AiStreamService {
     private String model;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AiCircuitBreakerService circuitBreakerService;
+
+    public AiStreamService(AiCircuitBreakerService circuitBreakerService) {
+        this.circuitBreakerService = circuitBreakerService;
+    }
 
     /**
      * SSE 流式问诊：将 LLM token 级别输出逐条发送到 SseEmitter。
-     *
-     * @param symptoms 患者症状描述
-     * @param history  多轮对话历史
-     * @param emitter  SSE 发射器
+     * 熔断保护：电路 OPEN 时立即返回错误事件。
      */
     public void streamDiagnosis(String symptoms, List<Map<String, String>> history, SseEmitter emitter) {
+        // 熔断检查：电路 OPEN 时快速失败
+        if (!circuitBreakerService.tryAcquireStreamPermission(emitter)) {
+            return;
+        }
+
         String systemPrompt = "你是一位专业的医疗咨询助手。请根据患者描述的症状，提供以下内容：\n" +
                 "1. 可能的疾病方向（不超过3个）\n" +
                 "2. 建议的检查项目\n" +
@@ -67,17 +72,12 @@ public class AiStreamService {
 
     /**
      * 调用 LLM Chat Completion API（stream 模式），逐 token 转发至 SseEmitter。
-     *
-     * @param systemPrompt 系统提示词
-     * @param userMessage  当前用户输入
-     * @param history      历史对话
-     * @param emitter      SSE 发射器
      */
     private void streamChatApi(String systemPrompt, String userMessage,
                                List<Map<String, String>> history, SseEmitter emitter) {
         HttpURLConnection connection = null;
+        boolean success = false;
         try {
-            // 1. 建立 HTTP 连接（流式）
             URL url = new URL(apiUrl);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
@@ -85,14 +85,13 @@ public class AiStreamService {
             connection.setRequestProperty("Authorization", "Bearer " + apiKey);
             connection.setDoOutput(true);
             connection.setConnectTimeout(10_000);
-            connection.setReadTimeout(60_000);  // 流式长连接
+            connection.setReadTimeout(60_000);
 
-            // 2. 构造请求体（stream: true）
             Map<String, Object> requestBody = new HashMap<>();
             requestBody.put("model", model);
             requestBody.put("temperature", 0.7);
             requestBody.put("max_tokens", 1000);
-            requestBody.put("stream", true);     // 关键：开启流式
+            requestBody.put("stream", true);
 
             List<Map<String, String>> messages = new ArrayList<>();
 
@@ -121,20 +120,14 @@ public class AiStreamService {
 
             String jsonBody = objectMapper.writeValueAsString(requestBody);
 
-            // 3. 发送请求
             try (OutputStream os = connection.getOutputStream()) {
                 os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
                 os.flush();
             }
 
-            // 4. 读取流式响应：逐行解析 SSE 格式 → 提取 delta content → send 给前端
             int responseCode = connection.getResponseCode();
             if (responseCode != 200) {
-                emitter.send(SseEmitter.event()
-                        .name("error")
-                        .data("AI 服务返回错误，状态码：" + responseCode));
-                emitter.complete();
-                return;
+                throw new RuntimeException("AI 服务返回错误，状态码：" + responseCode);
             }
 
             try (BufferedReader reader = new BufferedReader(
@@ -144,17 +137,10 @@ public class AiStreamService {
                 String line;
 
                 while ((line = reader.readLine()) != null) {
-                    // SSE 格式: "data: {...}"
-                    if (!line.startsWith("data: ")) {
-                        continue;
-                    }
+                    if (!line.startsWith("data: ")) continue;
 
                     String data = line.substring(6).trim();
-
-                    // [DONE] 信号，流结束
-                    if ("[DONE]".equals(data)) {
-                        break;
-                    }
+                    if ("[DONE]".equals(data)) break;
 
                     try {
                         @SuppressWarnings("unchecked")
@@ -164,39 +150,31 @@ public class AiStreamService {
                         List<Map<String, Object>> choices =
                                 (List<Map<String, Object>>) chunk.get("choices");
 
-                        if (choices == null || choices.isEmpty()) {
-                            continue;
-                        }
+                        if (choices == null || choices.isEmpty()) continue;
 
                         Map<String, Object> delta = (Map<String, Object>) choices.get(0).get("delta");
-                        if (delta == null) {
-                            continue;
-                        }
+                        if (delta == null) continue;
 
                         String content = (String) delta.get("content");
                         if (content != null && !content.isEmpty()) {
-                            // 逐 token 发送
                             emitter.send(SseEmitter.event()
                                     .name("token")
                                     .data(content));
                             fullContent.append(content);
                         }
 
-                        // 检查是否该条消息已结束
                         String finishReason = (String) choices.get(0).get("finish_reason");
-                        if (finishReason != null) {
-                            break;
-                        }
+                        if (finishReason != null) break;
 
                     } catch (Exception e) {
                         log.debug("解析 SSE chunk 失败: {}", data, e);
                     }
                 }
 
-                // 5. 发送完成事件（携带完整回复，供前端回显）
                 emitter.send(SseEmitter.event()
                         .name("done")
                         .data(fullContent.toString()));
+                success = true;
             }
 
             emitter.complete();

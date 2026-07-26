@@ -55,6 +55,7 @@ public class ChatService {
 
     private final ChatConversationRepository conversationRepo;
     private final ChatMessageRepository messageRepo;
+    private final AiCircuitBreakerService circuitBreakerService;
 
     /** 系统提示词 */
     private static final String CHAT_SYSTEM_PROMPT =
@@ -75,9 +76,11 @@ public class ChatService {
             "（注意：对话历史较长，早期内容已被截断）";
 
     public ChatService(ChatConversationRepository conversationRepo,
-                       ChatMessageRepository messageRepo) {
+                       ChatMessageRepository messageRepo,
+                       AiCircuitBreakerService circuitBreakerService) {
         this.conversationRepo = conversationRepo;
         this.messageRepo = messageRepo;
+        this.circuitBreakerService = circuitBreakerService;
     }
 
     // ==================== 对话 CRUD ====================
@@ -148,6 +151,11 @@ public class ChatService {
      */
     public void streamChat(Long userId, Long conversationId, String message,
                            SseEmitter emitter) {
+        // 熔断检查：电路 OPEN 时快速失败
+        if (!circuitBreakerService.tryAcquireStreamPermission(emitter)) {
+            return;
+        }
+
         ChatConversationEntity conversation;
         List<ChatMessageEntity> historyMessages;
 
@@ -356,8 +364,15 @@ public class ChatService {
         // 构建消息
         List<Map<String, String>> messages = buildMessages(historyMessages, message);
 
-        // 同步调用 LLM
-        String reply = callSyncApi(messages);
+        // 同步调用 LLM（带熔断保护）
+        String reply = circuitBreakerService.executeSyncCall(
+                () -> callSyncApi(messages),
+                () -> "AI 服务暂时不可用（熔断保护中），请 30 秒后重试。\n"
+                    + "您可以尝试以下操作：\n"
+                    + "1. 稍等片刻后重新发送\n"
+                    + "2. 前往医院就诊获取专业诊断\n"
+                    + "3. 紧急情况请拨打 120"
+        );
 
         // 存储 assistant 消息
         ChatMessageEntity assistantMessage = new ChatMessageEntity();

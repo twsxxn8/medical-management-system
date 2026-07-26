@@ -52,6 +52,7 @@ public class SemanticCacheService {
     private final StringRedisTemplate redis;
     private final EmbeddingService embeddingService;
     private final AiStructuredService aiStructuredService;
+    private final AiCircuitBreakerService circuitBreakerService;
     private DefaultRedisScript<List> evictScript;
 
     @Value("${app.ai.semantic-cache.enabled:true}")
@@ -73,10 +74,12 @@ public class SemanticCacheService {
 
     public SemanticCacheService(StringRedisTemplate redis,
                                 EmbeddingService embeddingService,
-                                AiStructuredService aiStructuredService) {
+                                AiStructuredService aiStructuredService,
+                                AiCircuitBreakerService circuitBreakerService) {
         this.redis = redis;
         this.embeddingService = embeddingService;
         this.aiStructuredService = aiStructuredService;
+        this.circuitBreakerService = circuitBreakerService;
     }
 
     @PostConstruct
@@ -108,13 +111,14 @@ public class SemanticCacheService {
         String normalizedSymptoms = normalize(symptoms);
         if (normalizedSymptoms.isEmpty()) return CacheResult.miss();
 
-        // 获取症状的 embedding 向量（可能为 null，表示 API 不可用）
+        // 获取症状的 embedding 向量（带熔断保护，失败时降级为文本匹配）
         float[] queryEmb = null;
         boolean embeddingAvailable = true;
         try {
-            queryEmb = embeddingService.getEmbedding(normalizedSymptoms);
-        } catch (EmbeddingException e) {
-            log.warn("获取 Embedding 失败，降级为文本相似度匹配: {}", e.getMessage());
+            queryEmb = circuitBreakerService.executeEmbedding(
+                    () -> embeddingService.getEmbedding(normalizedSymptoms));
+        } catch (RuntimeException e) {
+            log.warn("获取 Embedding 失败（熔断/异常），降级为文本相似度匹配: {}", e.getMessage());
             embeddingAvailable = false;
         }
 

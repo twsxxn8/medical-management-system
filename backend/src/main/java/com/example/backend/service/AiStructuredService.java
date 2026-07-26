@@ -21,9 +21,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * AI 结构化问诊服务：通过 response_format: json_object 约束 LLM 输出合法 JSON。
- *
- * <p>DeepSeek V4 支持 {@code response_format: {type: "json_object"}}，
- * 字段定义内嵌在 system prompt 中。
  */
 @Service
 public class AiStructuredService {
@@ -39,6 +36,8 @@ public class AiStructuredService {
     @Value("${app.ai.model}")
     private String model;
 
+    private final AiCircuitBreakerService circuitBreakerService;
+
     private static final String SYSTEM_PROMPT =
             "你是一位专业的医疗咨询助手。请根据患者描述的症状，给出结构化的分析结果，以 JSON 格式返回。\n" +
             "你必须返回严格的 JSON 对象，字段说明如下：\n" +
@@ -50,9 +49,16 @@ public class AiStructuredService {
             "- note: 补充说明（可选），字符串\n" +
             "注意：你的回答仅供参考，不构成医疗诊断，建议患者及时就医。";
 
-    /** 同步结构化 */
+    public AiStructuredService(AiCircuitBreakerService circuitBreakerService) {
+        this.circuitBreakerService = circuitBreakerService;
+    }
+
+    /** 同步结构化（带熔断保护） */
     public DiagnosisResult askDiagnosisStructured(String symptoms, List<Map<String, String>> history) {
-        String json = callApi(symptoms, history, false);
+        String json = circuitBreakerService.executeSyncCall(
+                () -> callApi(symptoms, history, false),
+                () -> "{\"error\":\"AI 服务暂时不可用（熔断保护中）\"}"
+        );
         try {
             return objectMapper.readValue(json, DiagnosisResult.class);
         } catch (Exception e) {
@@ -68,10 +74,14 @@ public class AiStructuredService {
         }
     }
 
-    /** SSE 流式结构化 */
+    /** SSE 流式结构化（带熔断保护） */
     public void streamStructuredDiagnosis(String symptoms, List<Map<String, String>> history,
                                           SseEmitter emitter) {
-        // 使用副本避免并发修改
+        // 熔断检查
+        if (!circuitBreakerService.tryAcquireStreamPermission(emitter)) {
+            return;
+        }
+
         final List<Map<String, String>> safeHistory = new ArrayList<>();
         if (history != null) safeHistory.addAll(history);
 
@@ -95,10 +105,7 @@ public class AiStructuredService {
 
             int responseCode = connection.getResponseCode();
             if (responseCode != 200) {
-                emitter.send(SseEmitter.event().name("error")
-                        .data("AI 服务返回错误，状态码：" + responseCode));
-                emitter.complete();
-                return;
+                throw new RuntimeException("AI 服务返回错误，状态码：" + responseCode);
             }
 
             try (BufferedReader reader = new BufferedReader(
@@ -171,7 +178,7 @@ public class AiStructuredService {
                 os.flush();
             }
             if (c.getResponseCode() != 200) {
-                return "{\"error\":\"状态码:" + c.getResponseCode() + "\"}";
+                throw new RuntimeException("AI 服务返回错误，状态码：" + c.getResponseCode());
             }
             try (BufferedReader r = new BufferedReader(
                     new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
@@ -187,10 +194,10 @@ public class AiStructuredService {
                     if (msg != null) return (String) msg.get("content");
                 }
             }
-            return "{\"error\":\"AI 服务返回为空\"}";
+            throw new RuntimeException("AI 服务返回为空");
         } catch (Exception e) {
             log.error("结构化 API 调用失败", e);
-            return "{\"error\":\"API调用失败:" + e.getMessage() + "\"}";
+            throw new RuntimeException("API调用失败:" + e.getMessage(), e);
         } finally {
             if (c != null) c.disconnect();
         }
@@ -213,7 +220,6 @@ public class AiStructuredService {
         sys.put("content", SYSTEM_PROMPT);
         messages.add(sys);
 
-        // 安全遍历 history（可能为 null）
         if (history != null) {
             for (Map<String, String> msg : history) {
                 if (msg == null) continue;
