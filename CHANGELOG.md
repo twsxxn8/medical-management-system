@@ -8,6 +8,66 @@
 
 ---
 
+### 新增 — feat/observability（#8）
+
+**分支：** `feat/observability` → `develop`
+**提交：** `0cd2943`
+**日期：** 2026-07-27
+**类型：** Feature
+**影响范围：** 系统可观测性
+
+#### 变更概述
+
+引入 Spring Boot Actuator + Micrometer Prometheus，新增复合健康检查、请求指标 AOP、断路器状态暴露、异常堆栈日志修复，前端新增系统监控仪表盘。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `backend/pom.xml` | 修改 | 新增 `spring-boot-starter-actuator` + `micrometer-registry-prometheus` |
+| `backend/.../config/AiHealthIndicator.java` | 新增 | 复合健康检查（DB `SELECT 1` + Redis `PING`） |
+| `backend/.../config/MetricsAspect.java` | 新增 | AOP 切面：记录每个 Controller 方法的调用次数、成功/失败数、耗时 |
+| `backend/.../config/SecurityConfig.java` | 修改 | 放行 `/actuator/**` 和 `/api/health/**` |
+| `backend/.../controller/HealthController.java` | 修改 | 注入 `HealthEndpoint` + `AiMetricsService`，返回真实健康状态 |
+| `backend/.../service/AiMetricsService.java` | 新增 | 断路器状态汇总 + AI 调用概览 |
+| `backend/.../exception/GlobalExceptionHandler.java` | 修改 | 三个 handler 全部添加 `log.warn/log.error`，兜底保留完整堆栈 |
+| `backend/src/main/resources/application.yml` | 修改 | 新增 `management` 配置段暴露 Prometheus 端点 |
+| `frontend/src/views/MonitorView.vue` | 新增 | 监控仪表盘：健康卡片 + 断路器表格 + Actuator 链接 |
+| `frontend/src/api/monitor.ts` | 新增 | 监控 API 封装 |
+| `frontend/src/router/index.ts` | 修改 | 新增 `/monitor` 路由 |
+| `frontend/src/components/Layout.vue` | 修改 | 新增 "系统监控" 菜单项（仅 ADMIN） |
+
+#### 新增/变更 API
+
+| 端点 | 说明 |
+|------|------|
+| `GET /actuator/health` | 复合健康检查（DB + Redis + 磁盘） |
+| `GET /actuator/metrics` | Micrometer 全量指标列表 |
+| `GET /actuator/prometheus` | Prometheus 格式指标暴露 |
+| `GET /actuator/circuitbreakers` | Resilience4j 断路器列表 |
+| `GET /api/health` | 增强业务健康检查（status 字段） |
+| `GET /api/health/circuit-breakers` | 断路器详情 JSON（状态/失败率/成功/失败数） |
+| `GET /api/ai/stats` | AI 调用概览（provider 列表 + 断路器状态） |
+
+#### 关键技术点
+
+- **复合健康检查：** `AiHealthIndicator` 实现 `HealthIndicator`，DB 执行 `SELECT 1`，Redis 执行 `PING`，任一失败即整体 `DOWN`
+- **AOP 指标采集：** `MetricsAspect` 用 `@Around` 拦截所有 Controller 方法，Micrometer Counter 按 `uri/controller/method/outcome` 维度记录
+- **断路器暴露：** 通过 `CircuitBreakerRegistry.getAllCircuitBreakers()` 遍历，输出状态/失败率/调用次数
+- **异常日志修复：** `GlobalExceptionHandler` 三个 handler 各自记录 `log.warn`/`log.error`，兜底 handler 保留 `ex` 完整堆栈
+
+#### 测试验证
+
+- [x] `mvn compile` / `mvn clean package` 编译打包通过
+- [x] `/actuator/health` 返回 `{"status":"UP","components":{"ai":{"database":"UP","redis":"UP"},...}}`
+- [x] `/actuator/circuitbreakers` 返回 `["deepseek-chat","deepseek-chat-stream","deepseek-embedding"]`
+- [x] `/actuator/prometheus` 返回 Prometheus 格式指标（含 `resilience4j_circuitbreaker_state`）
+- [x] `/api/health/circuit-breakers` 返回 3 个 breaker 的完整状态 JSON
+- [x] `/api/ai/stats` 返回 provider 列表 + 断路器概览
+- [x] 前端监控仪表盘正常渲染
+
+---
+
 ### 新增 — feat/multi-provider（#7）
 
 **分支：** `feat/multi-provider` → `develop`
