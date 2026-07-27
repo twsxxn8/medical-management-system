@@ -3,7 +3,7 @@ package com.example.backend.controller;
 import com.example.backend.common.Result;
 import com.example.backend.dto.CreatePatientRequest;
 import com.example.backend.dto.UpdatePatientRequest;
-import com.example.backend.entity.PatientEntity;
+import com.example.backend.Entity.PatientEntity;
 import com.example.backend.service.PatientService;
 import java.util.List;
 import javax.servlet.http.HttpServletRequest;

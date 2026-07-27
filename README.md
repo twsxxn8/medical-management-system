@@ -169,13 +169,13 @@ curl -X POST http://localhost:8080/api/ai/diagnosis/stream \
 master                         # 生产分支
 ├── develop                    # 开发主线
 │   ├── feat/ai-streaming      # SSE 流式响应 ✅
-│   ├── feat/semantic-cache    # 语义缓存（待开发）
-│   ├── feat/rate-limit        # 令牌桶限流（待开发）
-│   ├── feat/circuit-breaker   # 熔断与故障转移（待开发）
-│   ├── feat/multi-provider    # 多模型策略路由（待开发）
-│   ├── feat/structured-output # 结构化输出（待开发）
-│   ├── feat/ai-chat           # AI 对话管理（待开发）
-│   ├── feat/observability     # 可观测性（待开发）
+│   ├── feat/semantic-cache    # 语义缓存 ✅
+│   ├── feat/rate-limit        # 令牌桶限流 ✅
+│   ├── feat/circuit-breaker   # 熔断与故障转移 ✅
+│   ├── feat/multi-provider    # 多模型策略路由 ✅
+│   ├── feat/structured-output # 结构化输出 ✅
+│   ├── feat/ai-chat           # AI 对话管理 ✅
+│   ├── feat/observability     # 可观测性 ✅
 │   └── feat/infra             # 基础设施升级（待开发）
 ```
 

@@ -178,3 +178,31 @@ GO
 CREATE INDEX idx_system_log_time ON system_log(create_time);
 GO
 
+-- ============================================================
+-- AI Chat (多轮对话) 建表
+-- ============================================================
+
+CREATE TABLE chat_conversation (
+    id BIGINT PRIMARY KEY IDENTITY(1,1),
+    user_id BIGINT NOT NULL,
+    title NVARCHAR(200) NOT NULL DEFAULT N'新对话',
+    create_time DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
+    update_time DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
+    FOREIGN KEY (user_id) REFERENCES [user](id)
+);
+GO
+CREATE INDEX idx_chat_conversation_user ON chat_conversation(user_id);
+GO
+
+CREATE TABLE chat_message (
+    id BIGINT PRIMARY KEY IDENTITY(1,1),
+    conversation_id BIGINT NOT NULL,
+    role NVARCHAR(20) NOT NULL,
+    content NVARCHAR(MAX) NOT NULL,
+    create_time DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversation(id) ON DELETE CASCADE
+);
+GO
+CREATE INDEX idx_chat_message_conv ON chat_message(conversation_id);
+GO
+

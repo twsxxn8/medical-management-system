@@ -2,6 +2,8 @@ package com.example.backend.filter;
 
 import com.example.backend.service.RedisService;
 import com.example.backend.util.JwtUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
@@ -19,6 +21,8 @@ import java.util.ArrayList;
  * 备注：从请求头提取 Token，校验黑名单、解析用户信息后注入 Spring Security 上下文。
  */
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     private final RedisService redisService;
 
@@ -48,12 +52,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         // 2.5 检查 Token 是否在黑名单中（已登出）
-        String blacklistKey = "token:blacklist:" + token;
-        if (Boolean.TRUE.equals(redisService.hasKey(blacklistKey))) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"success\":false,\"code\":401,\"message\":\"Token 已失效，请重新登录\"}");
-            return;
+        // Redis 不可用时 fail-open：假定 Token 未在黑名单中
+        try {
+            String blacklistKey = "token:blacklist:" + token;
+            if (Boolean.TRUE.equals(redisService.hasKey(blacklistKey))) {
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write("{\"success\":false,\"code\":401,\"message\":\"Token 已失效，请重新登录\"}");
+                return;
+            }
+        } catch (Exception e) {
+            logger.warn("Redis 黑名单检查失败，放行 Token: {}", e.getMessage());
         }
 
         // 3. 解析用户信息

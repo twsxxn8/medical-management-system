@@ -48,7 +48,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String clientIp = getClientIp(request);
         boolean isAiApi = uri.startsWith("/api/ai/");
 
-        RateLimitResult result = rateLimitLuaService.checkByProfile("ip", clientIp, isAiApi);
+        RateLimitResult result;
+        try {
+            result = rateLimitLuaService.checkByProfile("ip", clientIp, isAiApi);
+        } catch (Exception e) {
+            log.warn("Redis 限流检查失败，放行请求: {}", e.getMessage());
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         if (!result.isAllowed()) {
             response.setStatus(429);

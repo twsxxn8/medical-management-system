@@ -39,11 +39,30 @@ app:
     secret: "${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}"
     expire-seconds: 7200
     issuer: "medical-system"
-  # AI 大模型配置（DeepSeek 官方 API）
+  # AI 大模型配置
   ai:
+    # 向后兼容：旧版单 provider flat 配置（providers 为空时使用）
     api-key: "${AI_API_KEY}"
     api-url: "${AI_API_URL:https://api.deepseek.com/v1/chat/completions}"
     model: "${AI_MODEL:deepseek-v4-flash}"
+    # 语义缓存配置
+    semantic-cache:
+      enabled: true
+      threshold: 0.88
+      ttl-seconds: 3600
+      max-entries: 1000
+    # Embedding API 配置（旧版 flat）
+    embedding-url: "${AI_EMBEDDING_URL:https://api.deepseek.com/v1/embeddings}"
+    embedding-model: "${AI_EMBEDDING_MODEL:deepseek-chat}"
+    # 新版：多 provider 列表（为空时自动用旧版 flat 配置）
+    providers:
+      - name: deepseek
+        priority: 1
+        api-key: "${AI_API_KEY}"
+        api-url: "https://api.deepseek.com/v1/chat/completions"
+        model: "deepseek-v4-flash"
+        embedding-url: "https://api.deepseek.com/v1/embeddings"
+        embedding-model: "deepseek-chat"
   upload:
     path: "${UPLOAD_PATH:./uploads}"
   cors:
@@ -58,3 +77,47 @@ app:
     allowed-headers:
       - "*"
     allow-credentials: true
+
+# ==================== 熔断器配置（Resilience4j） ====================
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      sliding-window-type: COUNT_BASED
+      sliding-window-size: 10
+      minimum-number-of-calls: 5
+      failure-rate-threshold: 50
+      wait-duration-in-open-state: 30s
+      permitted-number-of-calls-in-half-open-state: 2
+      automatic-transition-from-open-to-half-open-enabled: true
+      record-exceptions:
+        - java.net.SocketTimeoutException
+        - java.net.ConnectException
+        - java.io.IOException
+        - org.springframework.web.client.ResourceAccessException
+    llm-stream:
+      slow-call-duration-threshold: 60s
+      slow-call-rate-threshold: 50
+  instances:
+    deepseek-chat:
+      base-config: default
+    deepseek-chat-stream:
+      base-config: llm-stream
+    deepseek-embedding:
+      base-config: default
+      failure-rate-threshold: 30
+
+# ==================== Actuator 可观测性配置 ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,circuitbreakers,circuitbreakerevents
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: medical-system
