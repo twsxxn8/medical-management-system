@@ -1,5 +1,6 @@
 package com.example.backend.service;
 
+import com.example.backend.config.AiProviderConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -11,13 +12,13 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
  * Embedding 向量化服务。
- * 调用 DeepSeek 的 OpenAI 兼容 Embedding API，将文本转为 float[] 向量。
- * 模式与 AiStructuredService 保持一致：使用原生 HttpURLConnection。
+ *
+ * <p>调用 OpenAI 兼容 Embedding API，将文本转为 float[] 向量。
+ * 通过 {@link AiProviderRouter} 选择最优可用 provider。
  */
 @Service
 public class EmbeddingService {
@@ -25,14 +26,11 @@ public class EmbeddingService {
     private static final Logger log = LoggerFactory.getLogger(EmbeddingService.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${app.ai.api-key}")
-    private String apiKey;
+    private final AiProviderRouter providerRouter;
 
-    @Value("${app.ai.embedding-url:https://api.deepseek.com/v1/embeddings}")
-    private String embeddingUrl;
-
-    @Value("${app.ai.embedding-model:deepseek-chat}")
-    private String embeddingModel;
+    public EmbeddingService(AiProviderRouter providerRouter) {
+        this.providerRouter = providerRouter;
+    }
 
     /**
      * 获取文本的 embedding 向量。
@@ -45,25 +43,26 @@ public class EmbeddingService {
         if (text == null || text.isEmpty()) {
             throw new EmbeddingException("text 不能为空");
         }
-        String json = callEmbeddingApi(text);
+        AiProviderConfig provider = providerRouter.selectBestEmbeddingProvider();
+        String json = callEmbeddingApi(provider, text);
         return parseEmbeddingResponse(json);
     }
 
     /** 同步 HTTP 调用 Embedding API */
-    private String callEmbeddingApi(String text) throws EmbeddingException {
+    private String callEmbeddingApi(AiProviderConfig provider, String text) throws EmbeddingException {
         HttpURLConnection c = null;
         try {
-            URL url = new URL(embeddingUrl);
+            URL url = new URL(provider.getEmbeddingUrl());
             c = (HttpURLConnection) url.openConnection();
             c.setRequestMethod("POST");
             c.setRequestProperty("Content-Type", "application/json");
-            c.setRequestProperty("Authorization", "Bearer " + apiKey);
+            c.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
             c.setDoOutput(true);
             c.setConnectTimeout(5_000);
             c.setReadTimeout(10_000);
 
             Map<String, Object> body = Map.of(
-                    "model", embeddingModel,
+                    "model", provider.getEmbeddingModel(),
                     "input", text
             );
             String jsonBody = objectMapper.writeValueAsString(body);

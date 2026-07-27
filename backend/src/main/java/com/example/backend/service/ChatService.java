@@ -2,6 +2,7 @@ package com.example.backend.service;
 
 import com.example.backend.Entity.ChatConversationEntity;
 import com.example.backend.Entity.ChatMessageEntity;
+import com.example.backend.config.AiProviderConfig;
 import com.example.backend.dto.ChatConversationResponse;
 import com.example.backend.repository.ChatConversationRepository;
 import com.example.backend.repository.ChatMessageRepository;
@@ -20,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -30,11 +30,10 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *
  * <p>核心设计：
  * <ul>
- *   <li>流式调用复用 {@link HttpURLConnection} 模式（与 {@link AiStreamService} 一致），
- *       避免 WebFlux 与 Spring MVC 冲突</li>
+ *   <li>流式调用复用 {@link HttpURLConnection} 模式（与 {@link AiStreamService} 一致）</li>
  *   <li>对话和消息持久化到 DB，刷新页面不丢失</li>
  *   <li>上下文限制为最近 40 条历史消息，防止 Token 超限</li>
- *   <li>DB 操作为最佳努力（fail-soft），不阻塞对话流</li>
+ *   <li>通过 {@link AiProviderRouter} 实现多 provider 路由和 failover</li>
  * </ul>
  */
 @Service
@@ -44,18 +43,9 @@ public class ChatService {
 
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${app.ai.api-key}")
-    private String apiKey;
-
-    @Value("${app.ai.api-url}")
-    private String apiUrl;
-
-    @Value("${app.ai.model}")
-    private String model;
-
     private final ChatConversationRepository conversationRepo;
     private final ChatMessageRepository messageRepo;
-    private final AiCircuitBreakerService circuitBreakerService;
+    private final AiProviderRouter providerRouter;
 
     /** 系统提示词 */
     private static final String CHAT_SYSTEM_PROMPT =
@@ -77,10 +67,10 @@ public class ChatService {
 
     public ChatService(ChatConversationRepository conversationRepo,
                        ChatMessageRepository messageRepo,
-                       AiCircuitBreakerService circuitBreakerService) {
+                       AiProviderRouter providerRouter) {
         this.conversationRepo = conversationRepo;
         this.messageRepo = messageRepo;
-        this.circuitBreakerService = circuitBreakerService;
+        this.providerRouter = providerRouter;
     }
 
     // ==================== 对话 CRUD ====================
@@ -152,8 +142,9 @@ public class ChatService {
     public void streamChat(Long userId, Long conversationId, String message,
                            SseEmitter emitter) {
         // 熔断检查：电路 OPEN 时快速失败
-        if (!circuitBreakerService.tryAcquireStreamPermission(emitter)) {
-            return;
+        AiProviderConfig provider = providerRouter.acquireStreamProvider(emitter);
+        if (provider == null) {
+            return; // all OPEN, error already sent via emitter
         }
 
         ChatConversationEntity conversation;
@@ -209,17 +200,17 @@ public class ChatService {
         boolean streamSuccess = false;
         final Long finalConversationId = conversationId;
         try {
-            URL url = new URL(apiUrl);
+            URL url = new URL(provider.getApiUrl());
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+            connection.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
             connection.setDoOutput(true);
             connection.setConnectTimeout(10_000);
             connection.setReadTimeout(120_000);
 
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("model", model);
+            requestBody.put("model", provider.getModel());
             requestBody.put("temperature", 0.7);
             requestBody.put("max_tokens", 2000);
             requestBody.put("stream", true);
@@ -309,7 +300,7 @@ public class ChatService {
 
         } catch (Exception e) {
             log.error("SSE 流式聊天失败", e);
-            circuitBreakerService.recordStreamException(e);
+            providerRouter.recordStreamException(provider.getName(), e);
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -320,7 +311,7 @@ public class ChatService {
             }
         } finally {
             if (streamSuccess) {
-                circuitBreakerService.recordStreamResult(true);
+                providerRouter.recordStreamResult(provider.getName(), true);
             }
             if (connection != null) {
                 connection.disconnect();
@@ -370,14 +361,9 @@ public class ChatService {
         // 构建消息
         List<Map<String, String>> messages = buildMessages(historyMessages, message);
 
-        // 同步调用 LLM（带熔断保护）
-        String reply = circuitBreakerService.executeSyncCall(
-                () -> callSyncApi(messages),
-                () -> "AI 服务暂时不可用（熔断保护中），请 30 秒后重试。\n"
-                    + "您可以尝试以下操作：\n"
-                    + "1. 稍等片刻后重新发送\n"
-                    + "2. 前往医院就诊获取专业诊断\n"
-                    + "3. 紧急情况请拨打 120"
+        // 同步调用 LLM（带熔断保护 + multi-provider failover）
+        String reply = providerRouter.executeChatSync(
+                provider -> callSyncApi(provider, messages)
         );
 
         // 存储 assistant 消息
@@ -399,20 +385,20 @@ public class ChatService {
     }
 
     /** 同步调用 DeepSeek API，返回完整回复文本。失败时抛异常让断路器感知。 */
-    private String callSyncApi(List<Map<String, String>> messages) {
+    private String callSyncApi(AiProviderConfig provider, List<Map<String, String>> messages) {
         HttpURLConnection connection = null;
         try {
-            URL url = new URL(apiUrl);
+            URL url = new URL(provider.getApiUrl());
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+            connection.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
             connection.setDoOutput(true);
             connection.setConnectTimeout(10_000);
             connection.setReadTimeout(60_000);
 
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("model", model);
+            requestBody.put("model", provider.getModel());
             requestBody.put("temperature", 0.7);
             requestBody.put("max_tokens", 2000);
             requestBody.put("stream", false);

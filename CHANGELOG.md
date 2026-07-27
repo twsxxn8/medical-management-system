@@ -8,6 +8,71 @@
 
 ---
 
+### 新增 — feat/multi-provider（#7）
+
+**分支：** `feat/multi-provider` → `develop`
+**提交：** `<待提交>`
+**日期：** 2026-07-27
+**类型：** Feature
+**影响范围：** AI 调用路由
+
+#### 变更概述
+
+引入多 provider 路由机制，支持配置多个 AI 端点（DeepSeek / 硅基流动 / OpenAI 兼容）。通过 Priority 顺序降级策略，当高优先级 provider 断路器 OPEN 时自动 failover 到下一个可用 provider，提升 AI 服务可用性。Controller 层零改动，完全向后兼容。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `backend/.../config/AiProviderConfig.java` | 新增 | 不可变 provider 配置快照 POJO |
+| `backend/.../config/MultiProviderConfig.java` | 新增 | `@ConfigurationProperties` 多 provider 配置绑定，支持新旧两种配置格式 |
+| `backend/.../service/AiProviderRouter.java` | 新增 | 统一调度入口：同步 intra-call failover、流式 pre-call 断路器检查、Embedding provider 选择 |
+| `backend/.../service/AiCircuitBreakerService.java` | 修改 | 新增带 `breakerName` 参数的重载方法，不再持有硬编码 breaker 字段，改为从 Registry 动态获取 |
+| `backend/.../service/AiService.java` | 修改 | 删除 `@Value` 字段，注入 `AiProviderRouter`，`callChatApi` 加 `AiProviderConfig` 参数 |
+| `backend/.../service/AiStreamService.java` | 修改 | 同上，流式 provider 选择 + 结果记录通过 Router |
+| `backend/.../service/AiStructuredService.java` | 修改 | 同上，同步 + 流式两条路径均通过 Router |
+| `backend/.../service/ChatService.java` | 修改 | 同上，`streamChat` + `chatSync` 通过 Router |
+| `backend/.../service/EmbeddingService.java` | 修改 | 删除 `@Value`，通过 `providerRouter.selectBestEmbeddingProvider()` 获取 provider |
+| `backend/.../service/SemanticCacheService.java` | 修改 | Embedding 调用通过 `providerRouter.executeEmbedding()` |
+| `backend/src/main/resources/application.yml` | 修改 | 新增 `app.ai.providers` 列表，保留旧版 flat 配置向后兼容 |
+
+#### 配置变更
+
+```yaml
+app.ai:
+  # 旧版 flat 配置保留（providers 为空时自动降级）
+  providers:
+    - name: deepseek
+      priority: 1
+      api-key: "${AI_API_KEY}"
+      api-url: "https://api.deepseek.com/v1/chat/completions"
+      model: "deepseek-v4-flash"
+      embedding-url: "https://api.deepseek.com/v1/embeddings"
+      embedding-model: "deepseek-chat"
+    # - name: siliconflow     # 示例：第二个 provider
+    #   priority: 2
+    #   ...
+```
+
+#### 关键技术点
+
+- **Priority 降级：** 数字越小越优先，同步调用 intra-call failover（失败自动换下一个），流式调用 pre-call 检查（断路器 OPEN 则跳过）
+- **动态断路器：** breaker 命名规则 `{providerName}-{type}`，如 `deepseek-chat`、`siliconflow-chat-stream`
+- **向后兼容：** 保留旧版 `@Value` 注入链路，`AiCircuitBreakerService` 无参方法委托到 `"deepseek-*"` breaker
+- **Controller 层零改动：** 所有端点签名、返回类型完全不��
+
+#### 测试验证
+
+- [x] `mvn compile` / `mvn clean package` 编译通过
+- [x] 真实 DeepSeek API 调用正常（"头痛发热38度" → 返回完整诊断建议）
+- [x] 结构化问诊正常（返回 `DiagnosisResult` 完整字段）
+- [x] 流式 SSE 端点 `event:error` / `event:done` 协议正常
+- [x] 对话列表 / 登录 / 限流响应头 正常
+- [x] 前端 Vite `localhost:5173` HTTP 200
+- [x] 单 provider 配置下行为与改造前完全一致
+
+---
+
 ### 新增 — feat/circuit-breaker（#6）
 
 **分支：** `feat/circuit-breaker` → `develop`

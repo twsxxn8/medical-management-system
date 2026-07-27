@@ -1,5 +1,6 @@
 package com.example.backend.service;
 
+import com.example.backend.config.AiProviderConfig;
 import com.example.backend.dto.CachedDiagnosisResult;
 import com.example.backend.dto.DiagnosisResult;
 import com.example.backend.service.EmbeddingService.EmbeddingException;
@@ -52,7 +53,7 @@ public class SemanticCacheService {
     private final StringRedisTemplate redis;
     private final EmbeddingService embeddingService;
     private final AiStructuredService aiStructuredService;
-    private final AiCircuitBreakerService circuitBreakerService;
+    private final AiProviderRouter providerRouter;
     private DefaultRedisScript<List> evictScript;
 
     @Value("${app.ai.semantic-cache.enabled:true}")
@@ -75,11 +76,11 @@ public class SemanticCacheService {
     public SemanticCacheService(StringRedisTemplate redis,
                                 EmbeddingService embeddingService,
                                 AiStructuredService aiStructuredService,
-                                AiCircuitBreakerService circuitBreakerService) {
+                                AiProviderRouter providerRouter) {
         this.redis = redis;
         this.embeddingService = embeddingService;
         this.aiStructuredService = aiStructuredService;
-        this.circuitBreakerService = circuitBreakerService;
+        this.providerRouter = providerRouter;
     }
 
     @PostConstruct
@@ -111,11 +112,12 @@ public class SemanticCacheService {
         String normalizedSymptoms = normalize(symptoms);
         if (normalizedSymptoms.isEmpty()) return CacheResult.miss();
 
-        // 获取症状的 embedding 向量（带熔断保护，失败时降级为文本匹配）
+        // 获取症状的 embedding 向量（带熔断保护 + multi-provider，失败时降级为文本匹配）
         float[] queryEmb = null;
         boolean embeddingAvailable = true;
         try {
-            queryEmb = circuitBreakerService.executeEmbedding(
+            AiProviderConfig embProvider = providerRouter.selectBestEmbeddingProvider();
+            queryEmb = providerRouter.executeEmbedding(embProvider.getName(),
                     () -> embeddingService.getEmbedding(normalizedSymptoms));
         } catch (RuntimeException e) {
             log.warn("获取 Embedding 失败（熔断/异常），降级为文本相似度匹配: {}", e.getMessage());
@@ -253,10 +255,11 @@ public class SemanticCacheService {
         String normalizedSymptoms = normalize(symptoms);
         if (normalizedSymptoms.isEmpty()) return;
 
-        // 尝试获取 embedding（带熔断保护，失败不影响缓存存储）
+        // 尝试获取 embedding（带熔断保护 + multi-provider，失败不影响缓存存储）
         float[] embedding = null;
         try {
-            embedding = circuitBreakerService.executeEmbedding(
+            AiProviderConfig embProvider = providerRouter.selectBestEmbeddingProvider();
+            embedding = providerRouter.executeEmbedding(embProvider.getName(),
                     () -> embeddingService.getEmbedding(normalizedSymptoms));
         } catch (RuntimeException e) {
             log.warn("获取 Embedding 失败（熔断/异常），仅存储文本用于降级匹配: {}", e.getMessage());

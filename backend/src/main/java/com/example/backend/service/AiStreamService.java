@@ -1,5 +1,6 @@
 package com.example.backend.service;
 
+import com.example.backend.config.AiProviderConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -13,7 +14,6 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -24,9 +24,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * <ul>
  *   <li>使用原生 HttpURLConnection（避免 WebFlux 与 Spring MVC 冲突）直连 LLM API，
  *       开启 {@code stream: true}，逐行读取 SSE chunk</li>
- *   <li>每收到一个 delta token，立即通过 {@link SseEmitter#send(Object)} 推送给前端，
- *       实现打字机效果</li>
- *   <li>熔断保护：调用前检查 deepseek-chat-stream CircuitBreaker 状态，OPEN 时快速失败</li>
+ *   <li>每收到一个 delta token，立即通过 {@link SseEmitter#send(Object)} 推送给前端</li>
+ *   <li>通过 {@link AiProviderRouter} 选择 provider，断路器 OPEN 时自动跳过</li>
  * </ul>
  */
 @Service
@@ -34,30 +33,20 @@ public class AiStreamService {
 
     private static final Logger log = LoggerFactory.getLogger(AiStreamService.class);
 
-    @Value("${app.ai.api-key}")
-    private String apiKey;
-
-    @Value("${app.ai.api-url}")
-    private String apiUrl;
-
-    @Value("${app.ai.model}")
-    private String model;
-
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final AiCircuitBreakerService circuitBreakerService;
+    private final AiProviderRouter providerRouter;
 
-    public AiStreamService(AiCircuitBreakerService circuitBreakerService) {
-        this.circuitBreakerService = circuitBreakerService;
+    public AiStreamService(AiProviderRouter providerRouter) {
+        this.providerRouter = providerRouter;
     }
 
     /**
      * SSE 流式问诊：将 LLM token 级别输出逐条发送到 SseEmitter。
-     * 熔断保护：电路 OPEN 时立即返回错误事件。
      */
     public void streamDiagnosis(String symptoms, List<Map<String, String>> history, SseEmitter emitter) {
-        // 熔断检查：电路 OPEN 时快速失败
-        if (!circuitBreakerService.tryAcquireStreamPermission(emitter)) {
-            return;
+        AiProviderConfig provider = providerRouter.acquireStreamProvider(emitter);
+        if (provider == null) {
+            return; // all OPEN, error already sent via emitter
         }
 
         String systemPrompt = "你是一位专业的医疗咨询助手。请根据患者描述的症状，提供以下内容：\n" +
@@ -67,28 +56,29 @@ public class AiStreamService {
                 "4. 日常注意事项\n" +
                 "注意：你的回答仅供参考，不构成医疗诊断，建议患者及时就医。回答要简洁专业。";
 
-        streamChatApi(systemPrompt, symptoms, history != null ? history : new ArrayList<>(), emitter);
+        streamChatApi(provider, systemPrompt, symptoms,
+                history != null ? history : new ArrayList<>(), emitter);
     }
 
     /**
      * 调用 LLM Chat Completion API（stream 模式），逐 token 转发至 SseEmitter。
      */
-    private void streamChatApi(String systemPrompt, String userMessage,
+    private void streamChatApi(AiProviderConfig provider, String systemPrompt, String userMessage,
                                List<Map<String, String>> history, SseEmitter emitter) {
         HttpURLConnection connection = null;
         boolean success = false;
         try {
-            URL url = new URL(apiUrl);
+            URL url = new URL(provider.getApiUrl());
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json");
-            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+            connection.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
             connection.setDoOutput(true);
             connection.setConnectTimeout(10_000);
             connection.setReadTimeout(60_000);
 
             Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("model", model);
+            requestBody.put("model", provider.getModel());
             requestBody.put("temperature", 0.7);
             requestBody.put("max_tokens", 1000);
             requestBody.put("stream", true);
@@ -181,7 +171,7 @@ public class AiStreamService {
 
         } catch (Exception e) {
             log.error("SSE 流式调用失败", e);
-            circuitBreakerService.recordStreamException(e);
+            providerRouter.recordStreamException(provider.getName(), e);
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -192,7 +182,7 @@ public class AiStreamService {
             }
         } finally {
             if (success) {
-                circuitBreakerService.recordStreamResult(true);
+                providerRouter.recordStreamResult(provider.getName(), true);
             }
             if (connection != null) {
                 connection.disconnect();

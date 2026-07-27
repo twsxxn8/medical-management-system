@@ -1,10 +1,10 @@
 package com.example.backend.service;
 
+import com.example.backend.config.AiProviderConfig;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -13,29 +13,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 /**
- * AI 大模型服务类：调用 DeepSeek API 实现智能问诊功能。
+ * AI 大模型服务类：调用 Chat API 实现智能问诊功能。
+ *
+ * <p>通过 {@link AiProviderRouter} 选择 provider，支持多模型 failover。
  */
 @Service
 public class AiService {
-
-    @Value("${app.ai.api-key}")
-    private String apiKey;
-
-    @Value("${app.ai.api-url}")
-    private String apiUrl;
-
-    @Value("${app.ai.model}")
-    private String model;
 
     /**
      * RestTemplate with explicit timeouts to prevent infinite blocking.
      */
     private final RestTemplate restTemplate;
 
-    private final AiCircuitBreakerService circuitBreakerService;
+    private final AiProviderRouter providerRouter;
 
-    public AiService(AiCircuitBreakerService circuitBreakerService) {
-        this.circuitBreakerService = circuitBreakerService;
+    public AiService(AiProviderRouter providerRouter) {
+        this.providerRouter = providerRouter;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(30_000);
@@ -56,27 +49,23 @@ public class AiService {
         final String userMessage = symptoms;
         final List<Map<String, String>> finalHistory = history != null ? history : new ArrayList<>();
 
-        return circuitBreakerService.executeSyncCall(
-                () -> callChatApi(systemPrompt, userMessage, finalHistory),
-                () -> "AI 服务暂时不可用（熔断保护中），请 30 秒后重试。\n"
-                    + "您可以尝试以下操作：\n"
-                    + "1. 稍等片刻后重新发送\n"
-                    + "2. 前往医院就诊获取专业诊断\n"
-                    + "3. 紧急情况请拨打 120"
+        return providerRouter.executeChatSync(
+                provider -> callChatApi(provider, systemPrompt, userMessage, finalHistory)
         );
     }
 
     /**
-     * 调用大模型 Chat API（未受熔断保护，由 askDiagnosis 包装调用）
+     * 调用大模型 Chat API（接受 provider 参数，由 Router failover 调用）。
      */
     @SuppressWarnings("unchecked")
-    private String callChatApi(String systemPrompt, String userMessage, List<Map<String, String>> history) {
+    private String callChatApi(AiProviderConfig provider, String systemPrompt,
+                                String userMessage, List<Map<String, String>> history) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(apiKey);
+        headers.setBearerAuth(provider.getApiKey());
 
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("model", model);
+        requestBody.put("model", provider.getModel());
         requestBody.put("temperature", 0.7);
         requestBody.put("max_tokens", 1000);
 
@@ -106,7 +95,8 @@ public class AiService {
         requestBody.put("messages", messages);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-        Map<String, Object> response = restTemplate.postForObject(apiUrl, entity, Map.class);
+        Map<String, Object> response = restTemplate.postForObject(
+                provider.getApiUrl(), entity, Map.class);
 
         if (response != null && response.containsKey("choices")) {
             List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");

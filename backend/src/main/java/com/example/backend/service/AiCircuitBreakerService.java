@@ -2,6 +2,7 @@ package com.example.backend.service;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,25 +10,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * AI 熔断器统一服务：对 DeepSeek API 调用施加熔断保护。
+ * AI 熔断器统一服务：对 LLM API 调用施加熔断保护。
  *
- * <p>三个 CircuitBreaker 实例：
+ * <p>CircuitBreaker 按 {@code {providerName}-{type}} 命名：
  * <ul>
- *   <li><b>deepseek-chat</b> — 同步调用（AiService、AiStructuredService 同步、ChatService 同步）</li>
- *   <li><b>deepseek-chat-stream</b> — 流式调用（AiStreamService、AiStructuredService 流式、ChatService 流式）</li>
- *   <li><b>deepseek-embedding</b> — Embedding 调用（EmbeddingService）</li>
+ *   <li>{@code {name}-chat} — 同步调用</li>
+ *   <li>{@code {name}-chat-stream} — 流式调用</li>
+ *   <li>{@code {name}-embedding} — Embedding 调用</li>
  * </ul>
  *
- * <p>熔断器状态流转：CLOSED → OPEN（快速失败）→ HALF_OPEN（探测）→ CLOSED 或 OPEN
+ * <p>所有方法提供两个重载：
+ * <ol>
+ *   <li>带 {@code breakerName} 参数 —— {@link AiProviderRouter} 使用，支持多 provider</li>
+ *   <li>无参版本 —— 委托到 {@code "deepseek-*"} breaker，向后兼容</li>
+ * </ol>
  */
 @Service
 public class AiCircuitBreakerService {
 
     private static final Logger log = LoggerFactory.getLogger(AiCircuitBreakerService.class);
 
-    private final CircuitBreaker chatBreaker;
-    private final CircuitBreaker chatStreamBreaker;
-    private final CircuitBreaker embeddingBreaker;
+    private final CircuitBreakerRegistry registry;
 
     /** 熔断开启时的通用降级提示 */
     private static final String FALLBACK_MSG =
@@ -38,28 +41,20 @@ public class AiCircuitBreakerService {
             "3. 紧急情况请拨打 120";
 
     public AiCircuitBreakerService(CircuitBreakerRegistry registry) {
-        this.chatBreaker = registry.circuitBreaker("deepseek-chat");
-        this.chatStreamBreaker = registry.circuitBreaker("deepseek-chat-stream");
-        this.embeddingBreaker = registry.circuitBreaker("deepseek-embedding");
-        log.info("AI 熔断器初始化完成: chat={}, chat-stream={}, embedding={}",
-                chatBreaker.getState(), chatStreamBreaker.getState(), embeddingBreaker.getState());
+        this.registry = registry;
+        log.info("AI 熔断器注册表初始化完成，已注册实例: {}",
+                registry.getAllCircuitBreakers().size());
     }
 
     // ==================== 同步调用保护 ====================
 
-    /**
-     * 带熔断保护的同步调用。
-     *
-     * @param call     实际 LLM 调用
-     * @param fallback 熔断开启或调用失败时的降级逻辑
-     * @param <T>      返回值类型
-     * @return 调用结果或降级值
-     */
-    public <T> T executeSyncCall(Supplier<T> call, Supplier<T> fallback) {
+    /** 带熔断保护的同步调用（命名 breaker）。 */
+    public <T> T executeSyncCall(String breakerName, Supplier<T> call, Supplier<T> fallback) {
         try {
-            return chatBreaker.executeSupplier(call);
+            return registry.circuitBreaker(breakerName).executeSupplier(call);
         } catch (Exception e) {
-            log.warn("同步 LLM 调用失败（熔断/异常），执行降级: {}", e.getMessage());
+            log.warn("同步 LLM 调用失败（熔断/异常）[{}]，执行降级: {}",
+                    breakerName, e.getMessage());
             try {
                 return fallback.get();
             } catch (Exception fe) {
@@ -69,10 +64,15 @@ public class AiCircuitBreakerService {
         }
     }
 
-    /** 同步调用降级（使用预设降级文本） */
+    /** 带熔断保护的同步调用（向后兼容：使用 "deepseek-chat"）。 */
+    public <T> T executeSyncCall(Supplier<T> call, Supplier<T> fallback) {
+        return executeSyncCall("deepseek-chat", call, fallback);
+    }
+
+    /** 同步调用降级（使用预设降级文本，向后兼容）。 */
     @SuppressWarnings("unchecked")
     public <T> T executeSyncCall(Supplier<T> call) {
-        return executeSyncCall(call, () -> (T) FALLBACK_MSG);
+        return executeSyncCall("deepseek-chat", call, () -> (T) FALLBACK_MSG);
     }
 
     // ==================== 流式调用保护 ====================
@@ -80,12 +80,13 @@ public class AiCircuitBreakerService {
     /**
      * 流式调用熔断检查：电路 OPEN 时直接通过 SSE 发送错误并返回 false。
      *
-     * @param emitter SSE 发射器
-     * @return true = 可以继续调用，false = 已熔断（emitter 已发送错误并关闭）
+     * @param breakerName 断路器名称（如 "deepseek-chat-stream"）
+     * @param emitter     SSE 发射器
+     * @return true = 可以继续调用，false = 已熔断
      */
-    public boolean tryAcquireStreamPermission(SseEmitter emitter) {
-        if (chatStreamBreaker.getState() == CircuitBreaker.State.OPEN) {
-            log.warn("流式 LLM 熔断已开启，快速拒绝请求");
+    public boolean tryAcquireStreamPermission(String breakerName, SseEmitter emitter) {
+        if (registry.circuitBreaker(breakerName).getState() == CircuitBreaker.State.OPEN) {
+            log.warn("流式 LLM 熔断已开启 [{}]，快速拒绝请求", breakerName);
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -99,23 +100,34 @@ public class AiCircuitBreakerService {
         return true;
     }
 
-    /**
-     * 记录流式调用的结果到断路器。
-     * <p>流式调用无法直接用 {@code executeSupplier} 包装（异步、原地操作），
-     * 因此通过此方法手动告知断路器调用成功，使其正常统计失败率。
-     *
-     * @param success true = 成功，false = 失败
-     */
-    public void recordStreamResult(boolean success) {
+    /** 流式调用熔断检查（向后兼容：使用 "deepseek-chat-stream"）。 */
+    public boolean tryAcquireStreamPermission(SseEmitter emitter) {
+        return tryAcquireStreamPermission("deepseek-chat-stream", emitter);
+    }
+
+    /** 记录流式调用成功（命名 breaker）。 */
+    public void recordStreamResult(String breakerName, boolean success) {
         if (success) {
-            chatStreamBreaker.onSuccess(0, java.util.concurrent.TimeUnit.NANOSECONDS);
+            registry.circuitBreaker(breakerName)
+                    .onSuccess(0, TimeUnit.NANOSECONDS);
         }
     }
 
-    /** 手动记录流式调用异常，使断路器统计失败次数 */
+    /** 记录流式调用成功（向后兼容）。 */
+    public void recordStreamResult(boolean success) {
+        recordStreamResult("deepseek-chat-stream", success);
+    }
+
+    /** 记录流式调用异常（命名 breaker）。 */
+    public void recordStreamException(String breakerName, Throwable t) {
+        log.debug("记录流式调用异常到断路器 [{}]: {}", breakerName, t.getClass().getSimpleName());
+        registry.circuitBreaker(breakerName)
+                .onError(0, TimeUnit.NANOSECONDS, t);
+    }
+
+    /** 记录流式调用异常（向后兼容）。 */
     public void recordStreamException(Throwable t) {
-        log.debug("记录流式调用异常到断路器: {}", t.getClass().getSimpleName());
-        chatStreamBreaker.onError(0, java.util.concurrent.TimeUnit.NANOSECONDS, t);
+        recordStreamException("deepseek-chat-stream", t);
     }
 
     // ==================== Embedding 保护 ====================
@@ -123,34 +135,50 @@ public class AiCircuitBreakerService {
     /**
      * 带熔断保护的 Embedding 调用。
      *
-     * @param call Embedding API 调用
+     * @param breakerName 断路器名称（如 "deepseek-embedding"）
+     * @param call        Embedding API 调用
      * @return float[] embedding 向量
-     * @throws EmbeddingService.EmbeddingException 电路 OPEN 时抛出，由 SemanticCacheService 降级处理
+     * @throws EmbeddingService.EmbeddingException 电路 OPEN 时抛出
      */
-    public float[] executeEmbedding(Supplier<float[]> call) {
+    public float[] executeEmbedding(String breakerName, Supplier<float[]> call) {
         try {
-            return embeddingBreaker.executeSupplier(call);
+            return registry.circuitBreaker(breakerName).executeSupplier(call);
         } catch (Exception e) {
-            log.warn("Embedding 调用失败（熔断/异常），抛出 EmbeddingException 触发降级: {}", e.getMessage());
+            log.warn("Embedding 调用失败（熔断/异常）[{}]: {}", breakerName, e.getMessage());
             throw new EmbeddingService.EmbeddingException(
                     "Embedding 不可用（熔断保护）: " + e.getMessage(), e);
         }
     }
 
+    /** 带熔断保护的 Embedding 调用（向后兼容：使用 "deepseek-embedding"）。 */
+    public float[] executeEmbedding(Supplier<float[]> call) {
+        return executeEmbedding("deepseek-embedding", call);
+    }
+
     // ==================== 状态查询 ====================
 
-    /** 获取同步断路器当前状态 */
+    /** 获取指定断路器的当前状态。 */
+    public CircuitBreaker.State getState(String breakerName) {
+        return registry.circuitBreaker(breakerName).getState();
+    }
+
+    /** 获取同步断路器状态（向后兼容）。 */
     public CircuitBreaker.State getChatState() {
-        return chatBreaker.getState();
+        return getState("deepseek-chat");
     }
 
-    /** 获取流式断路器当前状态 */
+    /** 获取流式断路器状态（向后兼容）。 */
     public CircuitBreaker.State getChatStreamState() {
-        return chatStreamBreaker.getState();
+        return getState("deepseek-chat-stream");
     }
 
-    /** 获取 Embedding 断路器当前状态 */
+    /** 获取 Embedding 断路器状态（向后兼容）。 */
     public CircuitBreaker.State getEmbeddingState() {
-        return embeddingBreaker.getState();
+        return getState("deepseek-embedding");
+    }
+
+    /** 获取断路器注册表（供 Router 使用）。 */
+    public CircuitBreakerRegistry getRegistry() {
+        return registry;
     }
 }
