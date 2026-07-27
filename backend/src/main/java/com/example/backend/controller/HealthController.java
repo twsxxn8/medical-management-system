@@ -37,7 +37,7 @@ public class HealthController {
     }
 
     /**
-     * 断路器状态一览。
+     * 断路器状态一览（需认证）。
      */
     @GetMapping("/health/circuit-breakers")
     public Result<List<Map<String, Object>>> circuitBreakers() {
@@ -45,7 +45,7 @@ public class HealthController {
     }
 
     /**
-     * AI 服务概览（provider 列表 + 断路器状态）。
+     * AI 服务概览 — provider 列表 + 断路器状态（需认证）。
      */
     @GetMapping("/ai/stats")
     public Result<Map<String, Object>> aiStats() {
