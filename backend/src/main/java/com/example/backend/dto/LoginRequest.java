@@ -1,6 +1,6 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotBlank;
 
 /**
  * 登录请求体。

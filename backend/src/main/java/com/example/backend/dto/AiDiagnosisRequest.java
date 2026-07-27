@@ -1,6 +1,6 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotBlank;
 import java.util.List;
 import java.util.Map;
 

@@ -10,8 +10,8 @@ import java.time.LocalDateTime;                  // 时间类型（虽然这个�
 import java.util.Collections;
 import java.util.List;                           // 列表集合
 import java.util.Optional;                       // 可选类型（用于处理 null）
-import javax.servlet.http.HttpServletRequest;    // HTTP 请求对象（用于获取 Token）
-import javax.validation.Valid;                   // 参数校验注解
+import jakarta.servlet.http.HttpServletRequest;    // HTTP 请求对象（用于获取 Token）
+import jakarta.validation.Valid;                   // 参数校验注解
 import org.springframework.format.annotation.DateTimeFormat;  // 日期格式化注解（没用到）
 import org.springframework.web.bind.annotation.*; // Spring MVC 路由注解
 import com.example.backend.util.JwtUtil;         // JWT 工具类（解析 Token）

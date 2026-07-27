@@ -1,7 +1,7 @@
 package com.example.backend.dto;
 
 import java.math.BigDecimal;
-import javax.validation.constraints.Size;
+import jakarta.validation.constraints.Size;
 
 // 修改药品的请求参数（不修改 ID）
 public class UpdateMedicineRequest {

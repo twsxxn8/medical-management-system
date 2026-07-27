@@ -1,9 +1,9 @@
 package com.example.backend.dto;
 
 import java.math.BigDecimal;
-import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Size;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 // 新增药品的请求参数
 public class CreateMedicineRequest {

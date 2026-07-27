@@ -1,7 +1,7 @@
 package com.example.backend.exception;
 
 import com.example.backend.common.Result;
-import javax.validation.ConstraintViolationException;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.converter.HttpMessageNotReadableException;
