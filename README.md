@@ -4,8 +4,9 @@
 
 ---
 
-> **当前分支：** `develop`  
-> **最新更新：** 2026-07-27 — 基础设施升级（Spring Boot 3.2.7 + Java 17, Resilience4j 2.2, Hibernate 6）
+> **当前分支：** `master`  
+> **Spring Boot：** 3.2.7  **Java：** 17+  **Resilience4j：** 2.2.0  
+> **最新更新：** 2026-07-27 — 9 个 Feature 全部完成
 
 ---
 
