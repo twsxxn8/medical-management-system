@@ -1,6 +1,6 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotBlank;
 
 /**
  * AI 聊天请求 DTO：与现有 {@link AiDiagnosisRequest} 独立，

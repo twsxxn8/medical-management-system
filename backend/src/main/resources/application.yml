@@ -19,7 +19,7 @@ spring:
       ddl-auto: none
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.SQLServer2012Dialect
+        dialect: org.hibernate.dialect.SQLServerDialect
   # Redis 配置
   redis:
     host: localhost

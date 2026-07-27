@@ -1,6 +1,6 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotNull;
 
 /**
  * 修改预约状态请求体（对应 {@code appointment.status}）。

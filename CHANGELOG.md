@@ -8,6 +8,53 @@
 
 ---
 
+### 新增 — feat/infra（#9）
+
+**分支：** `feat/infra` → `develop`
+**提交：** `102528a`
+**日期：** 2026-07-27
+**类型：** Refactor
+**影响范围：** 全栈基础设施
+
+#### 变更概述
+
+升级至 Spring Boot 3.2 + Java 17 + Jakarta EE，彻底替换 javax.* 命名空间，同步升级 jjwt、Resilience4j、Hibernate、Spring Security 等核心依赖。
+
+#### 依赖变更
+
+| 组件 | 旧版本 | 新版本 |
+|------|--------|--------|
+| Spring Boot | 2.7.18 | 3.2.7 |
+| Java | 11 | 17+ |
+| jjwt | 0.11.5 | 0.12.6 |
+| Resilience4j | 1.7.1 (spring-boot2) | 2.2.0 (spring-boot3) |
+| Hibernate | 5.6.15 | 6.4.9 |
+| Tomcat | 9.0 | 10.1 |
+| Spring Security | 5.x | 6.x |
+| SQL Server 方言 | SQLServer2012Dialect | SQLServerDialect |
+
+#### 关键适配
+
+- **javax → jakarta** — 52 个文件，135 处 import 替换（persistence/servlet/validation/annotation/transaction）
+- **jjwt 0.12 API** — `Jwts.parserBuilder()` → `Jwts.parser().verifyWith().build()`，`setSubject()` → `subject()` 等 Builder API 升级
+- **Spring Security 6** — `antMatchers()` → `requestMatchers()`，Lambda DSL 配置风格
+- **Hibernate 6** — 方言自动检测，`SQLServer2012Dialect` 已废弃，改用 `SQLServerDialect`
+
+#### 测试验证
+
+- [x] `mvn compile` 编译通过（JDK 20）
+- [x] `mvn clean package` 打包通过
+- [x] 后端启动正常（Spring Boot 3.2.7 + Tomcat 10.1）
+- [x] 登录 `/api/auth/login` 正常
+- [x] AI 同步问诊调用 DeepSeek API 正常（"头痛发热38度" → 完整诊断）
+- [x] 结构化问诊返回 DiagnosisResult 正常
+- [x] Actuator `/actuator/health` 复合健康检查正常（DB + Redis UP）
+- [x] AI Stats 返回 provider + 断路器状态正常
+- [x] 限流 `X-RateLimit-Remaining` 响应头正常
+- [x] 所有业务端点功能无回归
+
+---
+
 ### 新增 — feat/observability（#8）
 
 **分支：** `feat/observability` → `develop`

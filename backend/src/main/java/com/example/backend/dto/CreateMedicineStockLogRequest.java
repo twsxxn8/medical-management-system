@@ -1,7 +1,7 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Size;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 /**
  * 新增库存日志请求体（对应 {@code medicine_stock_log}）。

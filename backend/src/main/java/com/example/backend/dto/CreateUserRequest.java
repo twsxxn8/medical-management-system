@@ -1,6 +1,6 @@
 package com.example.backend.dto;
 
-import javax.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotBlank;
 
 /**
  * 新增用户请求体（用于管理员创建医生账号）。

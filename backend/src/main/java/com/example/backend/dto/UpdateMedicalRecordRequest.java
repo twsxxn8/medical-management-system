@@ -1,7 +1,7 @@
 package com.example.backend.dto;
 
 import java.time.LocalDateTime;
-import javax.validation.constraints.Size;
+import jakarta.validation.constraints.Size;
 
 /**
  * 更新病历请求体（对应 {@code medical_record}）。

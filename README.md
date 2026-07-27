@@ -176,7 +176,7 @@ master                         # 生产分支
 │   ├── feat/structured-output # 结构化输出 ✅
 │   ├── feat/ai-chat           # AI 对话管理 ✅
 │   ├── feat/observability     # 可观测性 ✅
-│   └── feat/infra             # 基础设施升级（待开发）
+│   └── feat/infra             # 基础设施升级 ✅
 ```
 
 ## 许可证
