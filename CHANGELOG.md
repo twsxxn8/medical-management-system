@@ -8,6 +8,81 @@
 
 ---
 
+### 新增 — feat/circuit-breaker（#6）
+
+**分支：** `feat/circuit-breaker` → `develop`
+**提交：** `87101bf` `477e3d9`
+**日期：** 2026-07-27
+**类型：** Feature
+**影响范围：** AI 调用保护
+
+#### 变更概述
+
+引入 Resilience4j 熔断器保护所有 DeepSeek API 调用（同步/流式/Embedding），在 API 不可用时自动熔断快速失败并返回降级提示，避免请求堆积。修复 5 个代码缺陷。
+
+#### 变更文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `backend/pom.xml` | 修改 | 新增 `resilience4j-spring-boot2:1.7.1` 依赖 |
+| `backend/.../service/AiCircuitBreakerService.java` | 新增 | 3 个 CircuitBreaker 实例：deepseek-chat / deepseek-chat-stream / deepseek-embedding |
+| `backend/.../service/AiService.java` | 修改 | 同步调用通过 `executeSyncCall()` 包装，熔断降级返回友好提示 |
+| `backend/.../service/AiStreamService.java` | 修改 | 流式调用前置熔断检查 + 后置 `recordStreamResult/Exception` 反馈 |
+| `backend/.../service/AiStructuredService.java` | 修改 | 同步/流式结构化调用均接入熔断 |
+| `backend/.../service/ChatService.java` | 修改 | 同步/流式聊天接入熔断；`callSyncApi` 不再吞异常 |
+| `backend/.../service/SemanticCacheService.java` | 修改 | Embedding 调用通过 `executeEmbedding()` 熔断包装 |
+| `backend/.../service/EmbeddingService.java` | 无变更 | 预留 `EmbeddingException` 供熔断层使用 |
+| `backend/src/main/resources/application.yml` | 修改 | 新增 `resilience4j.circuitbreaker` 配置段；修复 `app:` YAML 重复键 |
+
+#### 配置变更
+
+```yaml
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      sliding-window-type: COUNT_BASED
+      sliding-window-size: 10
+      failure-rate-threshold: 50
+      wait-duration-in-open-state: 30s
+      permitted-number-of-calls-in-half-open-state: 2
+    llm-stream:
+      slow-call-duration-threshold: 60s
+      slow-call-rate-threshold: 50
+  instances:
+    deepseek-chat:         # 同步调用
+      base-config: default
+    deepseek-chat-stream:  # 流式调用
+      base-config: llm-stream
+    deepseek-embedding:    # Embedding 调用
+      base-config: default
+      failure-rate-threshold: 30
+```
+
+#### 关键技术点
+
+- **三种断路器分离：** 同步/流式/Embedding 各自独立统计，避免流式超时影响同步调用
+- **流式异步反馈：** 流式调用无法用 `executeSupplier` 直接包装，采用 `tryAcquireStreamPermission`（前置检查）+ `recordStreamResult/Exception`（后置报告）组合
+- **同步异常透传：** `ChatService.callSyncApi` 不再 catch 异常返回降级文本，改为抛出 `RuntimeException` 让断路器感知
+- **Fail-soft 降级：** 所有同步调用返回预设中文友好提示，不影响用户体验
+
+#### Bug 修复（#6.1）
+
+- **流式断路器空壳：** `recordStreamResult`/`recordStreamException` 只打日志，改为调用 `CircuitBreaker.onSuccess`/`onError`
+- **YAML 重复 `app:` 键：** `upload`/`cors` 错误嵌套在 `resilience4j` 下且有第二个 `app:` 键，合并后配置正常加载
+- **PatientEntity 包名不一致：** `com.example.backend.entity` → `com.example.backend.Entity`
+- **SemanticCacheService.store 缺熔断保护：** Embedding 调用改用 `circuitBreakerService.executeEmbedding()` 包装
+- **.gitignore 补充：** 添加 `dump.rdb` 避免 Redis 快照文件被提交
+
+#### 测试验证
+
+- [x] 同步问诊 API Key 无效时返回熔断降级文本
+- [x] 流式 SSE 接口 401 时正确推送 `event:error`
+- [x] 结构化 fallback 字段完整（urgency/note/precautions）
+- [x] 限流 `X-RateLimit-Remaining` 响应头正常
+- [x] Maven 编译通过
+
+---
+
 ### 新增 — feat/ai-chat（#5）
 
 **分支：** `feat/ai-chat` → `develop`
