@@ -13,6 +13,7 @@ import SystemLogsView from "../views/SystemLogsView.vue";
 import UserManageView from "../views/UserManageView.vue";
 import AiConsultView from "../views/AiConsultView.vue";
 import AiChatView from "../views/AiChatView.vue";
+import MonitorView from "../views/MonitorView.vue";
 import { getToken } from "../utils/authStorage";
 
 const routes: RouteRecordRaw[] = [
@@ -48,7 +49,9 @@ const routes: RouteRecordRaw[] = [
       // AI 智能问诊页：调用大模型 API 实现 AI 辅助问诊
       { path: "ai-consult", name: "ai-consult", component: AiConsultView, meta: { title: "AI 智能问诊" } },
       // AI 智能聊天页：多轮对话，支持会话管理
-      { path: "ai-chat", name: "ai-chat", component: AiChatView, meta: { title: "AI 智能聊天" } }
+      { path: "ai-chat", name: "ai-chat", component: AiChatView, meta: { title: "AI 智能聊天" } },
+      // 系统监控页：健康检查 + 断路器 + AI 统计
+      { path: "monitor", name: "monitor", component: MonitorView, meta: { title: "系统监控" } }
     ]
   }
 ];

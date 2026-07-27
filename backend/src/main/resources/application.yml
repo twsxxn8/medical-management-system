@@ -105,3 +105,19 @@ resilience4j.circuitbreaker:
     deepseek-embedding:
       base-config: default
       failure-rate-threshold: 30
+
+# ==================== Actuator 可观测性配置 ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,circuitbreakers,circuitbreakerevents
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: medical-system

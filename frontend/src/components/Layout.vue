@@ -78,6 +78,12 @@
           <span>AI 智能聊天</span>
         </el-menu-item>
 
+        <!-- 系统监控：仅管理员 (ADMIN) 可见 -->
+        <el-menu-item index="/monitor" v-if="userRole === 'ADMIN'">
+          <el-icon><Monitor /></el-icon>
+          <span>系统监控</span>
+        </el-menu-item>
+
       </el-menu>
     </el-aside>
 
