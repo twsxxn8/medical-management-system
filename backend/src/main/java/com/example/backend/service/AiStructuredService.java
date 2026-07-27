@@ -86,6 +86,7 @@ public class AiStructuredService {
         if (history != null) safeHistory.addAll(history);
 
         HttpURLConnection connection = null;
+        boolean success = false;
         try {
             URL url = new URL(apiUrl);
             connection = (HttpURLConnection) url.openConnection();
@@ -145,8 +146,10 @@ public class AiStructuredService {
                 }
             }
             emitter.complete();
+            success = true;
         } catch (Exception e) {
             log.error("SSE 结构化调用失败", e);
+            circuitBreakerService.recordStreamException(e);
             try {
                 emitter.send(SseEmitter.event().name("error")
                         .data("AI 服务调用失败：" + e.getMessage()));
@@ -155,6 +158,9 @@ public class AiStructuredService {
                 emitter.completeWithError(ex);
             }
         } finally {
+            if (success) {
+                circuitBreakerService.recordStreamResult(true);
+            }
             if (connection != null) connection.disconnect();
         }
     }

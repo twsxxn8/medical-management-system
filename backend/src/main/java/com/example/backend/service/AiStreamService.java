@@ -181,6 +181,7 @@ public class AiStreamService {
 
         } catch (Exception e) {
             log.error("SSE 流式调用失败", e);
+            circuitBreakerService.recordStreamException(e);
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -190,6 +191,9 @@ public class AiStreamService {
                 emitter.completeWithError(ex);
             }
         } finally {
+            if (success) {
+                circuitBreakerService.recordStreamResult(true);
+            }
             if (connection != null) {
                 connection.disconnect();
             }

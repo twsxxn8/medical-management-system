@@ -253,12 +253,13 @@ public class SemanticCacheService {
         String normalizedSymptoms = normalize(symptoms);
         if (normalizedSymptoms.isEmpty()) return;
 
-        // 尝试获取 embedding（可能失败，不影响缓存存储）
+        // 尝试获取 embedding（带熔断保护，失败不影响缓存存储）
         float[] embedding = null;
         try {
-            embedding = embeddingService.getEmbedding(normalizedSymptoms);
-        } catch (EmbeddingException e) {
-            log.warn("获取 Embedding 失败，仅存储文本用于降级匹配: {}", e.getMessage());
+            embedding = circuitBreakerService.executeEmbedding(
+                    () -> embeddingService.getEmbedding(normalizedSymptoms));
+        } catch (RuntimeException e) {
+            log.warn("获取 Embedding 失败（熔断/异常），仅存储文本用于降级匹配: {}", e.getMessage());
         }
 
         String hash = md5Hex(normalizedSymptoms).substring(0, 16);

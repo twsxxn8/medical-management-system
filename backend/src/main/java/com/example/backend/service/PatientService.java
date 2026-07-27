@@ -2,7 +2,7 @@ package com.example.backend.service;
 
 import com.example.backend.dto.CreatePatientRequest;
 import com.example.backend.dto.UpdatePatientRequest;
-import com.example.backend.entity.PatientEntity;
+import com.example.backend.Entity.PatientEntity;
 import com.example.backend.repository.PatientRepository;
 import com.example.backend.repository.UserRepository;
 import java.time.LocalDateTime;

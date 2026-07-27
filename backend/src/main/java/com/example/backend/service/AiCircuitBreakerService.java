@@ -101,22 +101,21 @@ public class AiCircuitBreakerService {
 
     /**
      * 记录流式调用的结果到断路器。
+     * <p>流式调用无法直接用 {@code executeSupplier} 包装（异步、原地操作），
+     * 因此通过此方法手动告知断路器调用成功，使其正常统计失败率。
      *
      * @param success true = 成功，false = 失败
      */
     public void recordStreamResult(boolean success) {
         if (success) {
-            chatStreamBreaker.reset(); // 不，应该用更轻量的方式
-            // CircuitBreaker 通过装饰器自动记录；这里手动记录异常时使用
+            chatStreamBreaker.onSuccess(0, java.util.concurrent.TimeUnit.NANOSECONDS);
         }
     }
 
-    /** 手动记录流式调用异常 */
+    /** 手动记录流式调用异常，使断路器统计失败次数 */
     public void recordStreamException(Throwable t) {
-        // 使用 Registry 的 event 机制或直接递增计数
         log.debug("记录流式调用异常到断路器: {}", t.getClass().getSimpleName());
-        // 注意：流式调用无法用 executeSupplier 直接包装（因为它是异步的、in-place 的）
-        // 这里记录日志并依赖断路器的手动状态管理
+        chatStreamBreaker.onError(0, java.util.concurrent.TimeUnit.NANOSECONDS, t);
     }
 
     // ==================== Embedding 保护 ====================

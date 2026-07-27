@@ -53,6 +53,20 @@ app:
     # Embedding API 配置
     embedding-url: "${AI_EMBEDDING_URL:https://api.deepseek.com/v1/embeddings}"
     embedding-model: "${AI_EMBEDDING_MODEL:deepseek-chat}"
+  upload:
+    path: "${UPLOAD_PATH:./uploads}"
+  cors:
+    allowed-origins:
+      - "http://localhost:5173"
+    allowed-methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allowed-headers:
+      - "*"
+    allow-credentials: true
 
 # ==================== 熔断器配置（Resilience4j） ====================
 resilience4j.circuitbreaker:
@@ -81,17 +95,3 @@ resilience4j.circuitbreaker:
     deepseek-embedding:
       base-config: default
       failure-rate-threshold: 30
-  upload:
-    path: "${UPLOAD_PATH:./uploads}"
-  cors:
-    allowed-origins:
-      - "http://localhost:5173"
-    allowed-methods:
-      - "GET"
-      - "POST"
-      - "PUT"
-      - "DELETE"
-      - "OPTIONS"
-    allowed-headers:
-      - "*"
-    allow-credentials: true

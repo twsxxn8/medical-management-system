@@ -206,6 +206,7 @@ public class ChatService {
 
         // 5. 调用 DeepSeek API 流式
         HttpURLConnection connection = null;
+        boolean streamSuccess = false;
         final Long finalConversationId = conversationId;
         try {
             URL url = new URL(apiUrl);
@@ -304,9 +305,11 @@ public class ChatService {
                     .data(objectMapper.writeValueAsString(doneData)));
 
             emitter.complete();
+            streamSuccess = true;
 
         } catch (Exception e) {
             log.error("SSE 流式聊天失败", e);
+            circuitBreakerService.recordStreamException(e);
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
@@ -316,6 +319,9 @@ public class ChatService {
                 emitter.completeWithError(ex);
             }
         } finally {
+            if (streamSuccess) {
+                circuitBreakerService.recordStreamResult(true);
+            }
             if (connection != null) {
                 connection.disconnect();
             }
@@ -392,7 +398,7 @@ public class ChatService {
         return result;
     }
 
-    /** 同步调用 DeepSeek API，返回完整回复文本 */
+    /** 同步调用 DeepSeek API，返回完整回复文本。失败时抛异常让断路器感知。 */
     private String callSyncApi(List<Map<String, String>> messages) {
         HttpURLConnection connection = null;
         try {
@@ -420,7 +426,7 @@ public class ChatService {
 
             int responseCode = connection.getResponseCode();
             if (responseCode != 200) {
-                return "AI 服务返回错误，状态码：" + responseCode;
+                throw new RuntimeException("AI 服务返回错误，状态码：" + responseCode);
             }
 
             try (BufferedReader reader = new BufferedReader(
@@ -428,11 +434,15 @@ public class ChatService {
                 StringBuilder sb = new StringBuilder();
                 String line;
                 while ((line = reader.readLine()) != null) sb.append(line);
-                return extractContent(sb.toString());
+                String content = extractContent(sb.toString());
+                if (content.isEmpty()) {
+                    throw new RuntimeException("AI 服务返回为空");
+                }
+                return content;
             }
         } catch (Exception e) {
-            log.error("同步调用 AI 失败", e);
-            return "AI 服务调用失败：" + e.getMessage();
+            log.error("同步调用 AI 失败（将触发熔断记录）", e);
+            throw new RuntimeException("AI 服务调用失败: " + e.getMessage(), e);
         } finally {
             if (connection != null) connection.disconnect();
         }
